@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["engine", "protocol", "server"]
+members = ["engine", "protocol", "server", "engine-python"]
 
 # `resolver = "2"` : version moderne du résolveur de dépendances de Cargo
 # (active par défaut pour toute édition >= 2021, mais on le déclare

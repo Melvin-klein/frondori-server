@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "frondori-engine"
+version = "0.1.0"
+description = "Native (Rust) 2D football simulation environment for the Frondori AI competition platform — Gym-style API, no server or network required."
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+# Nom du module importé (`import frondori_engine`) : doit correspondre à
+# `[lib].name` dans Cargo.toml.
+module-name = "frondori_engine"

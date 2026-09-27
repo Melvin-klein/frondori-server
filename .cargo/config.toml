@@ -1,0 +1,11 @@
+# `engine-python` compile avec la feature `extension-module` de PyO3 (elle ne
+# linke volontairement PAS contre libpython : une vraie extension Python
+# récupère ses symboles de l'interpréteur qui la charge au moment de
+# l'import, pas à la compilation). Sur Linux/Windows, un `cdylib` tolère par
+# défaut des symboles non résolus au moment du lien. Sur macOS, le linker est
+# strict et refuse de produire le `.dylib` sans ce flag — sans lui,
+# `cargo build --workspace`/`cargo test --workspace` échouent dès que
+# `engine-python` fait partie du workspace, même pour ceux qui ne touchent
+# jamais à Python. Fix documenté par PyO3 lui-même pour ce cas précis.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

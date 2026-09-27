@@ -1,0 +1,18 @@
+[package]
+name = "protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Dépendance de chemin (path dependency) : compilée directement depuis le
+# dossier voisin, aucune publication sur crates.io nécessaire. C'est ce qui
+# permet à `protocol` de réutiliser `Action`/`Actions`/`Observation` sans
+# aucune sérialisation ni copie : ce sont littéralement les mêmes types Rust.
+engine = { path = "../engine" }
+
+serde = { version = "1", features = ["derive"] }
+
+# `protocol` expose aussi les fonctions `encode`/`decode` (MessagePack) : le
+# format d'encodage sur le fil fait partie du contrat partagé entre serveur
+# et SDK, donc rmp-serde vit ici plutôt que d'être dupliqué dans `server`.
+rmp-serde = "1"

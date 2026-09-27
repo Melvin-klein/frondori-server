@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/target/
+# Cargo.lock EST committé : ce workspace produit des binaires
+# (frondori-server, manage-tokens), pas juste des bibliothèques — on veut des
+# builds reproductibles, pas une résolution de dépendances qui dérive.
+
+# Python (engine-python bindings, built via maturin)
+**/__pycache__/
+**/*.egg-info/
+**/.venv/
+*.pyc
+/engine-python/target/
+
+# macOS
+.DS_Store
+
+# Editors / tooling
+.claude/
+.vscode/
+.idea/

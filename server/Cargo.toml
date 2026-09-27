@@ -1,0 +1,74 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "frondori-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "manage-tokens"
+path = "src/bin/manage_tokens.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+protocol = { path = "../protocol" }
+
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+
+serde = { version = "1", features = ["derive"] }
+
+# Les traits Rust ne supportent pas nativement les méthodes `async fn` sans
+# passer par cette macro (elle réécrit `async fn` en une méthode qui retourne
+# un `Pin<Box<dyn Future<...>>>`) : nécessaire pour `AuthProvider`.
+async-trait = "0.1"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Génère le seed (non-déterministe) de chaque nouveau match. Le déterminisme
+# du moteur porte sur "seed + actions identiques => résultat identique", pas
+# sur le fait que deux matchs distincts partagent le même seed.
+rand = "0.8"
+
+# Parsing d'arguments en ligne de commande, pour le binaire `manage-tokens`
+# uniquement (le serveur lui-même n'a pas d'arguments CLI).
+clap = { version = "4.6.7", features = ["derive"] }
+
+# Identifiant public d'un match (`MatchId`), généré à la création (feature
+# "v4" = aléatoire, pas besoin de coordination centrale contrairement à un
+# compteur). Utilisé pour la clé du registre de spectateurs et l'URL
+# `/spectate/:match_id`.
+uuid = { version = "1.26.1", features = ["v4"] }
+
+# Le flux spectateur (`/spectate`) est en JSON, pas MessagePack : contrairement
+# au protocole compétitif (`protocol`, perf critique), ce flux n'a pas
+# d'exigence de perf, et JSON est nativement consommable par un navigateur.
+# Sert aussi à sérialiser les replays stockés en base (colonne JSONB).
+serde_json = "1.0.151"
+
+# Client PostgreSQL asynchrone pour `auth::postgres` (tokens persistants),
+# `matches::postgres` (résultats + replays) et le binaire `manage-tokens`.
+# `default-features = false` : uniquement le driver Postgres + le runtime
+# tokio + TLS — pas MySQL/SQLite, ni les features de mapping de types
+# (`uuid`, `json`...) : on sérialise nous-mêmes (`Uuid::to_string()`,
+# `serde_json::to_string()`) et on caste côté SQL (`$1::uuid`, `$1::jsonb`),
+# ce qui évite ces dépendances supplémentaires. Ni les macros `query!` (qui
+# exigeraient une base accessible à la COMPILATION) : toutes nos requêtes
+# sont vérifiées à l'exécution.
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
+
+[dev-dependencies]
+# Un vrai client WebSocket, utilisé UNIQUEMENT par le test de bout en bout
+# (`tests/smoke_test.rs`) pour parler au serveur comme le ferait un SDK
+# participant. `futures-util` fournit les traits `StreamExt`/`SinkExt`
+# (`.next()`/`.send()`) sur la connexion, qui implémente `Stream`/`Sink` mais
+# ne les expose pas comme méthodes inhérentes.
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

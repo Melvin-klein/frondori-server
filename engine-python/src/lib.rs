@@ -1,5 +1,11 @@
 //! Bindings Python (PyO3) autour du crate `engine`, pur Rust.
 //!
+//! Compilé en module natif INTERNE `frondori_engine._football` : ce n'est
+//! pas l'API publique. Les chercheurs utilisent l'environnement PettingZoo
+//! `football-v0` (`python/frondori_engine/envs/football.py`), qui s'appuie
+//! sur ce module — le même contrat que tous les autres environnements, écrits
+//! en Rust ou en Python.
+//!
 //! Ce crate ne contient AUCUNE logique de simulation : c'est une couche de
 //! traduction, dans les deux sens, entre les types de `engine` et des types
 //! Python. `engine` lui-même reste totalement ignorant de Python — c'est
@@ -395,11 +401,14 @@ impl Engine {
 }
 
 // ---------------------------------------------------------------------
-// Module Python (`import frondori_engine`)
+// Module Python natif (`frondori_engine._football`). Le nom de cette
+// fonction DOIT correspondre au dernier segment de `module-name` dans
+// `pyproject.toml` : c'est lui qui donne son nom au symbole d'entrée
+// (`PyInit__football`) que Python cherche au moment de l'import.
 // ---------------------------------------------------------------------
 
 #[pymodule]
-fn frondori_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _football(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EngineConfig>()?;
     m.add_class::<Action>()?;
     m.add_class::<Actions>()?;

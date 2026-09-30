@@ -4,15 +4,26 @@ build-backend = "maturin"
 
 [project]
 name = "frondori-engine"
-version = "0.1.0"
-description = "Native (Rust) 2D football simulation environment for the Frondori AI competition platform — Gym-style API, no server or network required."
+version = "0.2.0"
+description = "Frondori research environments (PettingZoo API): native Rust football, pure-Python cooperative kitchen, and more — no server or network required."
 requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "gymnasium>=1.0",
+    "pettingzoo>=1.24",
+]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
 [tool.maturin]
-# Nom du module importé (`import frondori_engine`) : doit correspondre à
-# `[lib].name` dans Cargo.toml.
-module-name = "frondori_engine"
+# Projet mixte Rust + Python : le paquet public est dans `python/`, et le
+# module natif compilé depuis `src/lib.rs` s'installe DANS ce paquet, sous le
+# nom `frondori_engine._football` (cf. `[lib].name` dans Cargo.toml et le
+# nom de la fonction `#[pymodule]`).
+python-source = "python"
+module-name = "frondori_engine._football"

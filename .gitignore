@@ -11,6 +11,9 @@
 **/.venv/
 *.pyc
 /engine-python/target/
+# Module natif compilé que `maturin develop` dépose dans le paquet source.
+*.so
+*.pyd
 
 # macOS
 .DS_Store

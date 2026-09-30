@@ -1,42 +1,36 @@
-"""Équivalent Python de `engine/examples/random_agent.rs` : fait tourner un
-match complet entre deux équipes jouant des actions aléatoires, entièrement
-en local (aucun réseau, aucun serveur).
+"""Joue un épisode complet avec des actions aléatoires, dans n'importe quel
+environnement du registre — même code pour tous, c'est tout l'intérêt du
+contrat commun. Aucun serveur, aucun réseau.
 
-Lancer avec : python examples/random_agent.py
+Lancer avec :
+    python examples/random_agent.py              # football-v0
+    python examples/random_agent.py kitchen-v0
 """
 
-import random
+import sys
 
-from frondori_engine import Action, Actions, Engine, EngineConfig
-
-
-def random_actions(n_players: int) -> Actions:
-    return Actions(players=[
-        Action(move_dir=(random.uniform(-1, 1), random.uniform(-1, 1)))
-        for _ in range(n_players)
-    ])
+import frondori_engine
 
 
 def main() -> None:
-    # Seed fixe : relancer ce script produit exactement le même match.
-    seed = 42
-    config = EngineConfig()
-    players_per_team = config.players_per_team
+    env_id = sys.argv[1] if len(sys.argv) > 1 else "football-v0"
+    env = frondori_engine.make(env_id)
 
-    engine = Engine(config, seed)
-    engine.reset()
+    # Seed fixe : relancer ce script rejoue exactement le même épisode.
+    env.reset(seed=42)
+    for agent in env.possible_agents:
+        env.action_space(agent).seed(42)
 
-    tick = 0
-    while True:
-        actions = (random_actions(players_per_team), random_actions(players_per_team))
-        result = engine.step(actions)
-        print(f"tick {tick}: score A={result.observations[0].score} reward A={result.rewards[0].total()}")
+    returns = {agent: 0.0 for agent in env.possible_agents}
+    steps = 0
+    while env.agents:
+        actions = {agent: env.action_space(agent).sample() for agent in env.agents}
+        _, rewards, _, _, _ = env.step(actions)
+        for agent, reward in rewards.items():
+            returns[agent] += reward
+        steps += 1
 
-        if result.done:
-            print(f"Match terminé après {tick} ticks : score final {result.observations[0].score}")
-            break
-
-        tick += 1
+    print(f"{env_id} : épisode terminé en {steps} pas, retours cumulés {returns}")
 
 
 if __name__ == "__main__":

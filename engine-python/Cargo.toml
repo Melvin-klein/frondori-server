@@ -3,11 +3,12 @@ name = "engine-python"
 version = "0.1.0"
 edition = "2021"
 
-# Le nom du module importé côté Python (`import frondori_engine`) — distinct
-# du nom du crate Cargo, qui lui suit la convention du reste du workspace
-# (dossier `engine-python`, avec un tiret).
+# Module natif INTERNE (`frondori_engine._football`) : le paquet Python
+# public (`python/frondori_engine/`) est écrit en Python par-dessus, et
+# expose le football comme un environnement PettingZoo parmi d'autres. Le
+# préfixe `_` signale qu'on n'est pas censé l'importer directement.
 [lib]
-name = "frondori_engine"
+name = "_football"
 crate-type = ["cdylib"]
 
 [dependencies]

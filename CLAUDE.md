@@ -1,30 +1,32 @@
-# Frondori — plateforme de compétition d'IA (football 2D)
+# Frondori — plateforme de compétition et de recherche en IA
 
 Plateforme où des participants (étudiants, chercheurs, développeurs) hébergent
 leur propre modèle chez eux et se connectent via un SDK, en WebSocket, pour
-faire jouer leur modèle sur un jeu de football 2D simplifié. Objectif :
+le faire jouer dans des environnements de simulation. Le premier est un
+football 2D ; d'autres, sans aucun rapport, vont s'ajouter au fil des
+questions de recherche (cf. `engine-python` ci-dessous). Objectif :
 performance temps réel + architecture simple à maintenir.
-
-**Ce dépôt n'est pas (encore) un dépôt git.** Pas de commits, pas d'historique
-à consulter — l'état du code sur disque est la seule source de vérité.
 
 ## Vue d'ensemble
 
-Un seul workspace Cargo (trois crates, compilées ensemble, un seul binaire
-final) + un SDK Python séparé.
+Un workspace Cargo de quatre crates. Le SDK de compétition vit dans un dépôt
+séparé (`frondori-sdk-python`), et le site dans `frondori-web` (Laravel, même
+base Postgres).
 
 ```
 frondori-server/
-├── engine/     moteur de simulation physique (rapier2d), pur, sans réseau
-├── protocol/   types de messages partagés serveur <-> SDK, encodage MessagePack
-├── server/     binaire principal : gateway (auth+matchmaking) + match runner
-└── sdk/python/ SDK Python pour les participants (package séparé, pas dans le workspace Cargo)
+├── engine/         moteur physique du football (rapier2d), pur, sans réseau
+├── protocol/       types de messages serveur <-> SDK, encodage MessagePack
+├── server/         binaire principal : gateway (auth+matchmaking) + match runner
+├── engine-python/  environnements de recherche (PettingZoo), dont le football
+│                   via des bindings PyO3 d'`engine` ; publié sur PyPI (`frondori-engine`)
+└── viewer/         visionneuse spectateur locale (HTML statique)
 ```
 
-Les trois crates Rust communiquent par appel de fonction direct (dépendances
-`path = "../..."`), jamais par réseau/IPC. Le SDK Python, lui, parle au
-serveur exclusivement via WebSocket + MessagePack — c'est la seule frontière
-réseau du projet.
+Les crates Rust communiquent par appel de fonction direct (dépendances
+`path = "../..."`), jamais par réseau/IPC. Le SDK, lui, parle au serveur
+exclusivement via WebSocket + MessagePack — c'est la seule frontière réseau
+du projet.
 
 ## `engine` — moteur de simulation
 
@@ -89,8 +91,13 @@ Timeout d'action -> NOOP. Déconnexion -> forfait immédiat, pas de
 reconnexion. **Piège connu** : le serveur envoie l'observation du DERNIER
 tick puis ferme la connexion sans attendre de réponse (il sait déjà que le
 match est fini) — n'importe quel client doit tolérer un échec d'envoi juste
-après la dernière observation (cf. `ConnectionLostError`/le `try/except`
-dans le SDK Python pour l'exemple de référence).
+après la dernière observation, ET un échec de fermeture de sa propre
+connexion (cf. `Agent.play` dans le SDK Python pour l'exemple de référence).
+
+Deux exemples utiles pour tester sans attendre un match réseau de 5 minutes :
+`server/examples/seed_test_match.rs` (match complet simulé hors réseau et
+persisté dans Postgres) et `server/examples/short_test_server.rs` (vrai
+serveur réseau, matchs de 2 secondes, auth en mémoire).
 
 **`auth`** (`src/auth/`) : trait `AuthProvider` avec deux implémentations :
 - `InMemoryAuthProvider` : table en mémoire, utilisée par défaut si
@@ -121,16 +128,34 @@ Sans `DATABASE_URL`, le serveur démarre quand même (auth en mémoire, table
 vide, aucun token accepté — utile pour un `cargo run` rapide, jamais pour un
 usage réel).
 
-## `sdk/python` — SDK participant
+## `engine-python` — environnements de recherche
 
-Package Python indépendant (pas dans le workspace Cargo), voir
-`sdk/python/README.md` pour l'usage. API callback : `Agent(url, token).run(act)`
-(bloquant, script classique) ou `await agent.play(act)` (notebook
-Jupyter/code déjà async). Erreurs dédiées : `AuthenticationError`,
-`ConnectionLostError`, `ProtocolError`.
+Projet mixte Rust + Python (maturin) : le paquet public est
+`python/frondori_engine/`, le module natif `frondori_engine._football`
+(compilé depuis `src/lib.rs`) n'est qu'un détail d'implémentation du football.
 
-Environnement de dev : `cd sdk/python && python -m venv .venv && source
-.venv/bin/activate && pip install -e ".[dev]"`.
+**Le contrat commun, c'est PettingZoo** (`ParallelEnv`, spaces Gymnasium),
+pas les structs de `protocol`. Choix délibéré : les futurs environnements
+peuvent n'avoir aucun rapport avec le football (ex. `kitchen-v0`, cuisine
+coopérative à la Overcooked, écrite en Python pur pour le vérifier). Tout
+environnement :
+- est enregistré sous un identifiant versionné `nom-vN` (`registry.py`).
+  Changer des règles = publier `nom-v(N+1)`, jamais modifier `nom-vN`
+  (reproductibilité des résultats, replays et classements) ;
+- se rend via `render_mode="scene"` : primitives génériques rect/cercle/texte
+  en JSON (`scene.py`), pour qu'un seul afficheur dessine tous les jeux ;
+- est couvert automatiquement par `tests/test_contract.py` dès son
+  `register(...)` : API PettingZoo, déterminisme par seed, observations
+  conformes à leur space. **Piège** : le `parallel_api_test` officiel ne
+  vérifie PAS l'appartenance des observations à leur space (constaté avec un
+  contrôle négatif) — d'où le test explicite.
+
+`.cargo/config.toml` ajoute des flags de lien macOS : sans eux, la feature
+`extension-module` de PyO3 casse `cargo build/test --workspace` sur macOS.
+
+Dev : `cd engine-python && source .venv/bin/activate && maturin develop &&
+python -m pytest`. Un simple `cargo build -p engine-python` ne produit pas un
+module importable : toujours passer par maturin.
 
 ## Commandes utiles
 
@@ -142,21 +167,30 @@ cargo run -p engine --example random_agent
 # Rust : avec Postgres (sinon fallback mémoire)
 DATABASE_URL="postgres://melvine@localhost/frondori" cargo test --workspace
 
-# Python
-cd sdk/python && source .venv/bin/activate && python -m pytest
+# Environnements de recherche (Python)
+cd engine-python && source .venv/bin/activate && maturin develop && python -m pytest
+python examples/random_agent.py kitchen-v0
 ```
 
 ## État du projet / ce qui reste
 
 Fait et validé de bout en bout (vrais sockets, vraie base Postgres) :
-`engine`, `protocol`, `server` (gateway+match runner+auth mémoire/Postgres),
-SDK Python.
+`engine`, `protocol`, `server` (gateway, match runner, auth, persistance des
+matchs + replays, flux spectateur `/spectate`), SDK Python (repo séparé).
+L'ELO est calculé côté `frondori-web` (commande `matches:update-ratings`).
 
-Pas fait, volontairement hors scope V1 : classement/ELO, spectateurs/replay,
-règles avancées (hors-jeu, fautes), reconnexion en cours de match.
+Chantier en cours, multi-environnements :
+- phase 1 (faite) : contrat PettingZoo, registre versionné, rendu en scène,
+  `football-v0` et `kitchen-v0` en local ;
+- phase 2 (à faire) : protocole, serveur, SDK et site sur ce MÊME contrat.
+  Décidé : le serveur exécute chaque environnement dans un **processus séparé**
+  (indépendant du langage), le protocole transporte un identifiant
+  d'environnement + des valeurs validées contre les spaces, la compatibilité
+  avec l'ancien protocole football n'est pas à préserver, le classement se
+  choisit par type d'environnement (ELO en duel, score partagé en coopératif).
 
-Pas fait, à faire si besoin : persistance des résultats de match (juste
-loggés actuellement), SDK dans un autre langage que Python, CI, dépôt git.
+Hors scope pour l'instant : règles avancées du football (hors-jeu, fautes),
+reconnexion en cours de match, CI.
 
 ## Convention de travail sur ce projet
 

@@ -1,19 +1,14 @@
 # frondori-engine
 
-Environnement de simulation football 2D de la plateforme Frondori, natif
-(Rust, via [PyO3](https://pyo3.rs)/[maturin](https://www.maturin.rs)),
-utilisable directement depuis Python — API façon Gym (`reset()` / `step()`),
-**sans serveur, sans réseau, sans token**.
+Les environnements de recherche de Frondori, au format
+[PettingZoo](https://pettingzoo.farama.org/) : même contrat pour tous,
+qu'ils soient écrits en Rust ou en Python. Utilisables directement en local,
+**sans serveur, sans réseau, sans token**, et compatibles avec l'écosystème
+qui parle PettingZoo (RLlib, TorchRL, CleanRL, SuperSuit...).
 
 Ce paquet n'est **pas** le SDK de compétition (`frondori-sdk`, séparé) : il
-ne parle à aucun serveur et ne peut pas jouer un vrai match classé. Il sert à
-itérer vite sur une politique en local, avant de la brancher sur `frondori-sdk`
-pour l'exécuter en compétition réelle.
-
-Ce paquet est une fine couche de traduction PyO3 autour du crate Rust
-`engine` (dans le même dépôt, `frondori-server`) : toute la logique de
-simulation (physique rapier2d, déterminisme, détection de but...) vit là-bas,
-inchangée — ce paquet ne fait qu'exposer son API à Python.
+ne joue aucun match classé. Il sert à itérer vite sur une politique ou une
+idée d'environnement.
 
 ## Installation
 
@@ -21,63 +16,88 @@ inchangée — ce paquet ne fait qu'exposer son API à Python.
 pip install frondori-engine
 ```
 
-(Wheel précompilée — aucun compilateur Rust requis.)
+Wheel précompilée : aucun compilateur Rust requis.
 
 ## Démarrage rapide
 
 ```python
-from frondori_engine import Action, Actions, Engine, EngineConfig
+import frondori_engine
 
-config = EngineConfig()  # 3v3 par défaut, cf. les valeurs par défaut ci-dessous
-engine = Engine(config, seed=42)
+env = frondori_engine.make("football-v0")
+observations, infos = env.reset(seed=42)
 
-obs_a, obs_b = engine.reset()
-
-result = engine.step((
-    Actions(players=[Action(move_dir=(1.0, 0.0)) for _ in obs_a.self_team]),
-    Actions(players=[Action() for _ in obs_b.self_team]),  # Action() = NOOP
-))
-
-print(result.observations[0].score, result.rewards[0].total(), result.done)
+while env.agents:
+    actions = {agent: env.action_space(agent).sample() for agent in env.agents}
+    observations, rewards, terminations, truncations, infos = env.step(actions)
 ```
 
-Voir [`examples/random_agent.py`](examples/random_agent.py) pour un exemple
-complet (équivalent Python de `engine/examples/random_agent.rs`).
+Le même code marche pour tous les environnements : remplacer
+`"football-v0"` par `"kitchen-v0"` suffit. Voir
+[`examples/random_agent.py`](examples/random_agent.py).
 
-## API
+## Environnements disponibles
 
-- `EngineConfig(...)` : tous les paramètres ont une valeur par défaut
-  (mêmes valeurs que `engine::config::EngineConfig::default()` côté Rust) —
-  `players_per_team=3`, `field_width=40.0`, `field_height=20.0`,
-  `max_ticks=9000` (5 min à 30 Hz), `max_score=None`, etc.
-- `Engine(config, seed)` : `reset()` renvoie `(Observation, Observation)` ;
-  `step((actions_a, actions_b))` renvoie un `StepResult`
-  (`.observations`, `.rewards`, `.done`, `.info`).
-- `Action(move_dir=(0.0, 0.0), kick=None)` : une action pour un joueur.
-  `kick` est soit `None` (pas de tir ce tick), soit un tuple `(dx, dy)` —
-  direction du tir, puissance encodée dans sa norme.
-- `Actions(players=[...])` : les actions de tous les joueurs d'UNE équipe.
-- `Observation.self_team` / `.opponent_team` : listes de `PlayerObs(position, velocity)`,
-  toujours du point de vue de l'équipe qui reçoit l'observation (on attaque
-  toujours vers `x = +1`, quel que soit le côté réel du terrain).
-- `engine.spectator_frame()` : état ABSOLU du match (jamais mirroré, avec
-  l'équipe de chaque joueur) — pour visualiser localement, indépendamment de
-  ce que `step()` renvoie aux deux équipes.
+`frondori_engine.registered_ids()` liste les environnements installés.
+
+| Id | Agents | Type | Écrit en |
+|---|---|---|---|
+| `football-v0` | `team_0`, `team_1` (une équipe par agent) | compétitif | Rust (moteur physique rapier2d) |
+| `kitchen-v0` | `chef_0`, `chef_1` | coopératif, récompense partagée | Python |
+
+Le détail des observations, actions et récompenses de chaque environnement
+est dans la docstring de son module (`frondori_engine/envs/`), et leur forme
+exacte dans `env.observation_space(agent)` / `env.action_space(agent)`.
+
+Les paramètres d'un environnement se passent à `make` :
+
+```python
+frondori_engine.make("football-v0", players_per_team=5, max_score=3)
+frondori_engine.make("kitchen-v0", onions_needed=3, cook_time=20, layout=(...))
+```
+
+## Versions
+
+Chaque identifiant porte une version (`nom-vN`). Changer les règles d'un
+environnement, c'est publier `nom-v(N+1)`, jamais modifier `nom-vN` : un
+résultat obtenu sur `football-v0` reste comparable dans le temps.
 
 ## Déterminisme
 
-Même seed + mêmes actions à chaque tick = même résultat, tick pour tick.
-Utile pour rejouer/déboguer un épisode exact, ou paralléliser un
-entraînement avec des runs reproductibles.
+Même seed + mêmes actions = même épisode, pas pour pas (vérifié par les tests
+officiels PettingZoo, sur chaque environnement).
 
-## Développer / builder ce paquet
+## Rendu
+
+`make(..., render_mode="scene")` puis `env.render()` renvoie une scène
+générique — rectangles, cercles, texte — sérialisable en JSON. Tout
+environnement se dessine ainsi avec le même afficheur, sans code spécifique
+au jeu. Le format est décrit dans `frondori_engine/scene.py`.
+
+## Ajouter un environnement
+
+1. Un module dans `python/frondori_engine/envs/` qui implémente
+   `pettingzoo.ParallelEnv` (spaces Gymnasium, `render_mode="scene"`).
+2. Une ligne `register("mon_env-v0", MonEnv)` dans
+   `python/frondori_engine/__init__.py`.
+
+Les tests de contrat (`tests/test_contract.py`) s'appliquent alors
+automatiquement au nouvel environnement : API PettingZoo, déterminisme,
+observations conformes à leur space, rendu sérialisable.
+
+Un environnement qui a besoin de performances natives s'écrit en Rust, dans
+le même esprit que le football (`src/lib.rs` expose le moteur, un module
+Python l'enveloppe en `ParallelEnv`).
+
+## Développer ce paquet
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install maturin
-maturin develop   # build + installe le module dans le venv courant
+maturin develop            # build du module natif + installation du paquet
+pip install -e ".[dev]"
+python -m pytest
 ```
 
 Ce crate fait partie du workspace Cargo `frondori-server` (dépendance locale
-directe sur `engine`, `path = "../engine"`) mais se publie et se release
-indépendamment, via `maturin publish` (wheels PyPI), depuis ce même dépôt.
+directe sur `engine`) mais se publie indépendamment sur PyPI, via
+`maturin publish`.

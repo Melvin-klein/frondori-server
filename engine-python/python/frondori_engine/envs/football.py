@@ -46,6 +46,9 @@ class FootballEnv(ParallelEnv):
         self.render_mode = render_mode
         self._config = _football.EngineConfig(**config)
         self._n = self._config.players_per_team
+        # Un pas simule `dt` secondes : en compétition, le serveur joue donc
+        # le match à 1/dt pas par seconde, pour qu'il se déroule en temps réel.
+        self.metadata = {**self.metadata, "render_fps": 1 / self._config.dt}
 
         self.possible_agents = ["team_0", "team_1"]
         self.agents = []

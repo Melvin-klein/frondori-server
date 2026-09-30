@@ -16,7 +16,6 @@ name = "manage-tokens"
 path = "src/bin/manage_tokens.rs"
 
 [dependencies]
-engine = { path = "../engine" }
 protocol = { path = "../protocol" }
 
 tokio = { version = "1", features = ["full"] }
@@ -64,11 +63,12 @@ serde_json = "1.0.151"
 # sont vérifiées à l'exécution.
 sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
 
-[dev-dependencies]
-# Un vrai client WebSocket, utilisé UNIQUEMENT par le test de bout en bout
-# (`tests/smoke_test.rs`) pour parler au serveur comme le ferait un SDK
-# participant. `futures-util` fournit les traits `StreamExt`/`SinkExt`
-# (`.next()`/`.send()`) sur la connexion, qui implémente `Stream`/`Sink` mais
-# ne les expose pas comme méthodes inhérentes.
-tokio-tungstenite = "0.24"
+# `join_all` : attendre les sockets de TOUS les participants d'un match en
+# même temps (leur nombre dépend de l'environnement). Sert aussi aux tests
+# (traits `StreamExt`/`SinkExt` sur le client WebSocket).
 futures-util = "0.3"
+
+[dev-dependencies]
+# Un vrai client WebSocket, utilisé UNIQUEMENT par les tests de bout en bout
+# pour parler au serveur comme le ferait un SDK participant.
+tokio-tungstenite = "0.24"

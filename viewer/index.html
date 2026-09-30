@@ -57,68 +57,31 @@
   <canvas id="pitch" width="700" height="350"></canvas>
 
   <script>
-    // Même algorithme de dessin que `frondori-web/resources/js/lib/spectatorFrame.js`
-    // (délibérément dupliqué, pas partagé entre les deux dépôts pour l'instant —
-    // cf. CLAUDE.md de frondori-server). Format de frame : voir ce même fichier.
-    const TEAM_COLORS = ['#3b82f6', '#ef4444'];
-    const BALL_COLOR = '#f8fafc';
-    const PITCH_COLOR = '#0f5132';
-    const LINE_COLOR = 'rgba(255,255,255,0.5)';
+    // Dessine une scène générique (cf. `frondori_engine/scene.py`) : le
+    // même code pour TOUS les environnements, sans rien connaître de leurs
+    // règles. La scène s'adapte à la largeur du canvas en gardant ses
+    // proportions.
+    function drawScene(canvas, ctx, scene) {
+      const scale = canvas.width / scene.width;
+      canvas.height = Math.round(scene.height * scale);
+      ctx.fillStyle = scene.background;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    function toCanvas(x, y, width, height, margin) {
-      const innerWidth = width - margin * 2;
-      const innerHeight = height - margin * 2;
-      return [margin + ((x + 1) / 2) * innerWidth, margin + ((y + 1) / 2) * innerHeight];
-    }
-
-    function drawPitch(ctx, width, height, margin) {
-      ctx.fillStyle = PITCH_COLOR;
-      ctx.fillRect(0, 0, width, height);
-
-      ctx.strokeStyle = LINE_COLOR;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(margin, margin, width - margin * 2, height - margin * 2);
-
-      ctx.beginPath();
-      ctx.moveTo(width / 2, margin);
-      ctx.lineTo(width / 2, height - margin);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(width / 2, height / 2, Math.min(width, height) * 0.12, 0, Math.PI * 2);
-      ctx.stroke();
-
-      const goalHalfHeight = (height - margin * 2) * 0.15;
-      ctx.fillStyle = LINE_COLOR;
-      ctx.fillRect(margin - 6, height / 2 - goalHalfHeight, 6, goalHalfHeight * 2);
-      ctx.fillRect(width - margin, height / 2 - goalHalfHeight, 6, goalHalfHeight * 2);
-    }
-
-    function drawSpectatorFrame(ctx, frame, width, height) {
-      const margin = Math.min(width, height) * 0.05;
-      drawPitch(ctx, width, height, margin);
-
-      const playerRadius = Math.min(width, height) * 0.025;
-      for (const player of frame.players) {
-        const [x, y] = toCanvas(player.position[0], player.position[1], width, height, margin);
-        ctx.beginPath();
-        ctx.fillStyle = TEAM_COLORS[player.team] ?? '#94a3b8';
-        ctx.arc(x, y, playerRadius, 0, Math.PI * 2);
-        ctx.fill();
+      for (const shape of scene.shapes) {
+        ctx.fillStyle = shape.fill;
+        if (shape.type === 'rect') {
+          ctx.fillRect(shape.x * scale, shape.y * scale, shape.w * scale, shape.h * scale);
+        } else if (shape.type === 'circle') {
+          ctx.beginPath();
+          ctx.arc(shape.x * scale, shape.y * scale, shape.r * scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (shape.type === 'text') {
+          ctx.font = `600 ${shape.size * scale}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(shape.text, shape.x * scale, shape.y * scale);
+        }
       }
-
-      const [ballX, ballY] = toCanvas(frame.ball.position[0], frame.ball.position[1], width, height, margin);
-      ctx.beginPath();
-      ctx.fillStyle = BALL_COLOR;
-      ctx.arc(ballX, ballY, playerRadius * 0.6, 0, Math.PI * 2);
-      ctx.fill();
-
-      const [homeScore, awayScore] = frame.score;
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
-      ctx.fillRect(width / 2 - 46, 10, 92, 26);
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = '600 14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(`${homeScore} — ${awayScore}`, width / 2, 28);
     }
 
     const canvas = document.getElementById('pitch');
@@ -143,8 +106,7 @@
       socket.onclose = () => { statusEl.textContent = 'terminé / déconnecté'; };
       socket.onerror = () => { statusEl.textContent = 'erreur de connexion (match inconnu ou terminé ?)'; };
       socket.onmessage = (event) => {
-        const frame = JSON.parse(event.data);
-        drawSpectatorFrame(ctx, frame, canvas.width, canvas.height);
+        drawScene(canvas, ctx, JSON.parse(event.data));
       };
     }
 

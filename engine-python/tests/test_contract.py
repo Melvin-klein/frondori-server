@@ -37,6 +37,13 @@ def test_same_seed_same_episode(env_id):
 
 
 @pytest.mark.parametrize("env_id", ENV_IDS)
+def test_declares_a_tick_rate(env_id):
+    # Cadence d'un match en compétition : le serveur en a besoin pour jouer
+    # l'environnement en réseau (cf. `worker._describe`).
+    assert frondori_engine.make(env_id).metadata["render_fps"] > 0
+
+
+@pytest.mark.parametrize("env_id", ENV_IDS)
 def test_scene_render_is_json_serializable(env_id):
     env = frondori_engine.make(env_id, render_mode="scene")
     env.reset(seed=0)

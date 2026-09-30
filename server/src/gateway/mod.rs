@@ -1,25 +1,26 @@
-//! Module gateway : authentification et matchmaking UNIQUEMENT. Ne doit
-//! jamais contenir de logique de simulation (celle-ci vit dans `match_runner`
-//! et `engine`).
+//! Module gateway : authentification et matchmaking UNIQUEMENT. Ne contient
+//! aucune logique de jeu (elle vit dans l'environnement, exécuté par un
+//! worker séparé, cf. `crate::environments`).
 
 pub mod state;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use engine::types::SpectatorFrame;
+use futures_util::future::join_all;
 use tokio::sync::broadcast;
 
+use crate::environments::EnvInfo;
 use crate::gateway::state::{AppState, PendingPlayer};
 use crate::match_runner::{run_match, MatchContext, MatchId};
 
 /// Handler axum pour `GET /agent`. `WebSocketUpgrade` négocie le passage de
 /// HTTP à WebSocket ; `.on_upgrade(...)` prend une closure appelée une fois
-/// la connexion effectivement établie, avec le `WebSocket` déjà prêt à
-/// envoyer/recevoir des messages.
+/// la connexion effectivement établie.
 pub async fn agent_ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_new_connection(socket, state))
 }
@@ -37,26 +38,26 @@ async fn handle_new_connection(mut socket: WebSocket, state: AppState) {
         return;
     };
 
-    // 2. Authentification, via l'abstraction `AuthProvider` (implémentation
-    // en mémoire pour cette V1, remplaçable par une vraie base plus tard
-    // sans toucher à ce module).
+    // 2. Authentification : le token dit QUI joue. L'environnement, lui, est
+    //    choisi par le client : un même agent peut jouer à plusieurs jeux.
     let player_id = match state.auth.authenticate(&hello.token).await {
-        Ok(id) => id,
+        Ok(player_id) => player_id,
         Err(err) => {
             tracing::debug!(reason = %err.reason, "authentification refusée");
-            let message = protocol::ServerMessage::AuthError(protocol::AuthError {
-                reason: err.reason,
-            });
-            if let Ok(bytes) = protocol::encode(&message) {
-                let _ = socket.send(Message::Binary(bytes)).await;
-            }
-            let _ = socket.close().await;
-            return;
+            return reject(socket, err.reason).await;
         }
+    };
+    let environment = hello.environment;
+    let Some(env) = state.catalog.get(&environment) else {
+        let mut available: Vec<&String> = state.catalog.keys().collect();
+        available.sort();
+        let reason = format!("environnement {environment:?} indisponible sur ce serveur (disponibles : {available:?})");
+        return reject(socket, reason).await;
     };
 
     let welcome = protocol::ServerMessage::Welcome(protocol::Welcome {
         player_id: player_id.clone(),
+        environment: environment.clone(),
     });
     let Ok(bytes) = protocol::encode(&welcome) else {
         tracing::error!("échec d'encodage du message Welcome");
@@ -67,102 +68,99 @@ async fn handle_new_connection(mut socket: WebSocket, state: AppState) {
         return;
     }
 
-    // 3. Matchmaking FIFO.
-    //
-    // `state.matchmaking_queue.lock().unwrap()` : le verrou est pris et
-    // relâché dans le même bloc `{ ... }`, JAMAIS à cheval sur un `.await`
-    // (cf. doc d'`AppState` : c'est précisément ce qui permet d'utiliser un
-    // `std::sync::Mutex`, plus léger qu'un mutex async, sans risquer de
-    // bloquer tout le runtime tokio).
+    // 3. Matchmaking FIFO, dans la file de CET environnement, jusqu'à avoir
+    //    autant de participants que l'environnement a d'agents.
+    let seats = env.agents.len();
+    let mut me = Some(PendingPlayer { id: player_id, socket });
     loop {
-        let waiting_opponent = {
-            let mut queue = state.matchmaking_queue.lock().unwrap();
-            queue.pop_front()
+        // Le verrou est pris et relâché dans ce bloc, JAMAIS à cheval sur un
+        // `.await` (cf. doc d'`AppState`).
+        let waiting: Vec<PendingPlayer> = {
+            let mut queues = state.matchmaking_queues.lock().unwrap();
+            let queue = queues.entry(environment.clone()).or_default();
+            if queue.len() + 1 < seats {
+                // Pas encore assez de monde : on attend en file, et c'est un
+                // prochain arrivant qui lancera le match.
+                queue.push_back(me.take().expect("présent tant qu'on n'est ni en file ni en match"));
+                return;
+            }
+            queue.drain(..seats - 1).collect()
         };
 
-        match waiting_opponent {
-            None => {
-                // Personne n'attend : on se met en file, et c'est le
-                // PROCHAIN arrivant qui déclenchera l'appariement.
-                let mut queue = state.matchmaking_queue.lock().unwrap();
-                queue.push_back(PendingPlayer {
-                    id: player_id,
-                    socket,
-                });
-                return;
+        // Un joueur en file peut s'être déconnecté depuis son arrivée : un
+        // ping rapide à chacun évite de lancer un match avec un socket mort.
+        let checked = join_all(waiting.into_iter().map(|mut player| async move {
+            let alive = quick_ping_check(&mut player.socket).await;
+            (player, alive)
+        }))
+        .await;
+        let (alive, dead): (Vec<_>, Vec<_>) = checked.into_iter().partition(|(_, alive)| *alive);
+        let alive: Vec<PendingPlayer> = alive.into_iter().map(|(player, _)| player).collect();
+
+        if !dead.is_empty() {
+            for (player, _) in &dead {
+                tracing::warn!(player_id = %player.id, "joueur en file déconnecté, retiré");
             }
-            Some(mut opponent) => {
-                // Le joueur en attente peut s'être déconnecté entre le
-                // moment où il a rejoint la file et maintenant : un ping
-                // rapide avant de démarrer le match évite de spawn un match
-                // avec un socket déjà mort.
-                if !quick_ping_check(&mut opponent.socket).await {
-                    tracing::warn!(
-                        player_id = %opponent.id,
-                        "joueur en file déconnecté, retiré ; on retente avec le suivant"
-                    );
-                    continue; // reboucle : retente avec le prochain de la file (ou se met en file si elle est vide)
-                }
-
-                let match_id = MatchId::new_v4();
-                tracing::info!(a = %opponent.id, b = %player_id, %match_id, "appariement, démarrage du match");
-
-                // Canal de diffusion pour les spectateurs de CE match :
-                // `broadcast::channel` retourne un `Sender` et un
-                // `Receiver` initial ; on jette ce premier `Receiver` (aucun
-                // spectateur n'est encore connecté), les suivants viendront
-                // de `sender.subscribe()` dans `spectate_ws_handler`. La
-                // capacité (64) borne le nombre de frames gardées en
-                // mémoire pour un spectateur temporairement lent ; au-delà,
-                // il saute les plus anciennes plutôt que de tout bloquer
-                // (cf. `spectate_ws_handler`).
-                let (spectator_tx, _) = broadcast::channel(64);
-                state
-                    .spectators
-                    .lock()
-                    .unwrap()
-                    .insert(match_id, spectator_tx.clone());
-
-                // `state.spectators` (Arc) cloné pour la tâche de nettoyage
-                // ci-dessous : `run_match` ne connaît rien du registre, il
-                // se contente d'émettre sur `spectator_tx`. C'est le gateway
-                // qui retire l'entrée une fois le match terminé, pour ne pas
-                // laisser le registre grossir indéfiniment au fil des matchs.
-                let spectators = state.spectators.clone();
-                let context = MatchContext {
-                    match_id,
-                    home_player_id: opponent.id,
-                    away_player_id: player_id,
-                    match_store: state.match_store.clone(),
-                    spectator_tx,
-                };
-                // `tokio::spawn` : lance cette tâche comme une tâche tokio
-                // INDÉPENDANTE, qui continue de vivre même après que cette
-                // fonction (`handle_new_connection`) se termine. Les deux
-                // sockets sont déplacés (move) dans la closure/l'appel :
-                // cette fonction-ci n'y touche plus jamais après.
-                tokio::spawn(async move {
-                    run_match(
-                        opponent.socket,
-                        socket,
-                        state.match_config.clone(),
-                        state.engine_config.clone(),
-                        rand::random(),
-                        context,
-                    )
-                    .await;
-                    spectators.lock().unwrap().remove(&match_id);
-                });
-                return;
+            // Les survivants reprennent leur place en tête de file, dans
+            // leur ordre d'arrivée, puis on retente.
+            let mut queues = state.matchmaking_queues.lock().unwrap();
+            let queue = queues.entry(environment.clone()).or_default();
+            for player in alive.into_iter().rev() {
+                queue.push_front(player);
             }
+            continue;
         }
+
+        let mut players = alive;
+        players.push(me.take().expect("présent tant qu'on n'est ni en file ni en match"));
+        start_match(&state, environment, env.clone(), players);
+        return;
     }
+}
+
+/// Crée le match : identifiant, canal spectateur, puis lance sa boucle dans
+/// une tâche tokio INDÉPENDANTE, qui continue de vivre après le retour de
+/// cette fonction.
+fn start_match(state: &AppState, environment: String, env: EnvInfo, players: Vec<PendingPlayer>) {
+    let match_id = MatchId::new_v4();
+    let player_ids: Vec<&str> = players.iter().map(|p| p.id.as_str()).collect();
+    tracing::info!(%match_id, %environment, players = ?player_ids, "appariement, démarrage du match");
+
+    // Canal de diffusion pour les spectateurs de CE match. Capacité 64 : un
+    // spectateur temporairement lent saute les scènes les plus anciennes
+    // plutôt que de ralentir le match (cf. `stream_spectator_frames`).
+    let (spectator_tx, _) = broadcast::channel(64);
+    state.spectators.lock().unwrap().insert(match_id, spectator_tx.clone());
+
+    // C'est le gateway, pas `run_match`, qui retire le match du registre à
+    // sa fin : le registre ne grossit pas indéfiniment.
+    let spectators = state.spectators.clone();
+    let context = MatchContext {
+        match_id,
+        environment,
+        env,
+        worker_command: state.worker_command.clone(),
+        match_store: state.match_store.clone(),
+        spectator_tx,
+    };
+    let config = state.match_config.clone();
+    tokio::spawn(async move {
+        run_match(players, config, rand::random(), context).await;
+        spectators.lock().unwrap().remove(&match_id);
+    });
+}
+
+async fn reject(mut socket: WebSocket, reason: String) {
+    let message = protocol::ServerMessage::AuthError(protocol::AuthError { reason });
+    if let Ok(bytes) = protocol::encode(&message) {
+        let _ = socket.send(Message::Binary(bytes)).await;
+    }
+    let _ = socket.close().await;
 }
 
 /// Vérifie qu'un socket en attente dans la file est toujours valide : on lui
 /// envoie un `Ping` protocolaire et on attend un `Pong` en retour, avec un
-/// délai court. Pas de réponse (ou erreur) => on considère le joueur
-/// déconnecté.
+/// délai court. Pas de réponse (ou erreur) => joueur considéré déconnecté.
 async fn quick_ping_check(socket: &mut WebSocket) -> bool {
     const PING_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -174,9 +172,7 @@ async fn quick_ping_check(socket: &mut WebSocket) -> bool {
         return false;
     }
 
-    let Ok(Some(Ok(Message::Binary(bytes)))) =
-        tokio::time::timeout(PING_TIMEOUT, socket.recv()).await
-    else {
+    let Ok(Some(Ok(Message::Binary(bytes)))) = tokio::time::timeout(PING_TIMEOUT, socket.recv()).await else {
         return false;
     };
 
@@ -186,12 +182,10 @@ async fn quick_ping_check(socket: &mut WebSocket) -> bool {
     )
 }
 
-/// Handler axum pour `GET /spectate/:match_id` : diffuse en direct l'état
-/// (absolu, jamais mirroré) d'un match EN COURS à qui se connecte, en JSON
-/// (pas MessagePack — ce flux n'a pas la même contrainte de performance que
-/// le protocole compétitif, et JSON se consomme nativement dans un
-/// navigateur). Aucune authentification : ce flux est public par conception
-/// (l'objectif est justement que n'importe qui puisse regarder).
+/// Handler axum pour `GET /spectate/:match_id` : diffuse en direct la scène
+/// d'un match EN COURS (format générique, cf. `frondori_engine/scene.py`),
+/// en JSON texte — directement consommable par un navigateur. Aucune
+/// authentification : ce flux est public par conception.
 pub async fn spectate_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -201,9 +195,6 @@ pub async fn spectate_ws_handler(
         return (StatusCode::BAD_REQUEST, "identifiant de match invalide").into_response();
     };
 
-    // Le verrou n'est tenu que le temps de cette ligne (`.subscribe()` est
-    // synchrone, pas d'`.await`) : même contrainte que partout ailleurs sur
-    // `std::sync::Mutex` dans ce module.
     let receiver = state
         .spectators
         .lock()
@@ -222,28 +213,20 @@ pub async fn spectate_ws_handler(
     ws.on_upgrade(move |socket| stream_spectator_frames(socket, receiver))
 }
 
-/// Relaie les frames du canal de diffusion vers le socket du spectateur,
+/// Relaie les scènes du canal de diffusion vers le socket du spectateur,
 /// jusqu'à ce que l'une des deux parties se ferme.
-async fn stream_spectator_frames(mut socket: WebSocket, mut receiver: broadcast::Receiver<SpectatorFrame>) {
+async fn stream_spectator_frames(mut socket: WebSocket, mut receiver: broadcast::Receiver<Arc<str>>) {
     loop {
         match receiver.recv().await {
-            Ok(frame) => {
-                let Ok(json) = serde_json::to_string(&frame) else {
-                    continue; // ne devrait jamais arriver (SpectatorFrame est toujours sérialisable)
-                };
-                if socket.send(Message::Text(json)).await.is_err() {
+            Ok(scene) => {
+                if socket.send(Message::Text(scene.to_string())).await.is_err() {
                     return; // spectateur déconnecté
                 }
             }
-            // Le spectateur était trop lent pour suivre le rythme des
-            // frames (canal de capacité 64, cf. `handle_new_connection`) :
-            // on saute directement aux frames suivantes plutôt que de
-            // couper la connexion pour un simple retard.
+            // Spectateur trop lent pour suivre : on saute aux scènes
+            // suivantes plutôt que de couper la connexion.
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            // Plus aucun `Sender` actif : le match est terminé (le gateway
-            // retire l'entrée du registre après `run_match`, ce qui fait
-            // tomber le dernier `Sender` connu). Rien à faire de plus, on
-            // ferme proprement en sortant de la boucle.
+            // Plus aucun `Sender` : le match est terminé.
             Err(broadcast::error::RecvError::Closed) => return,
         }
     }

@@ -23,6 +23,20 @@ def test_a_goal_rewards_the_scorer_and_penalizes_the_other_team():
     assert list(observations["team_1"]["score"]) == [0, 1]
 
 
+def test_the_same_policy_scores_from_either_side():
+    # Chaque équipe agit dans son propre repère : la politique qui marque en
+    # team_0 doit aussi marquer en team_1 (et non contre son camp).
+    env = frondori_engine.make("football-v0")
+    env.reset(seed=1)
+
+    for _ in range(9000):
+        _, rewards, *_ = env.step({"team_0": IDLE, "team_1": ATTACK})
+        if rewards["team_1"] != 0:
+            break
+
+    assert rewards == {"team_0": -1.0, "team_1": 1.0}
+
+
 def test_time_limit_is_a_truncation():
     env = frondori_engine.make("football-v0", max_ticks=5)
     env.reset(seed=0)

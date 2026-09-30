@@ -10,8 +10,10 @@ use super::{AuthError, AuthProvider, PlayerId};
 
 /// `IF NOT EXISTS` : sans danger à ré-exécuter à chaque démarrage. Une seule
 /// table pour une seule information (le lien token -> participant) ne
-/// justifie pas un système de migrations dédié (`sqlx migrate`, `refinery`...)
-/// pour cette V1 ; à reconsidérer si le schéma grossit.
+/// justifie pas un système de migrations dédié (`sqlx migrate`, `refinery`...).
+///
+/// Aucun environnement ici : un token identifie un agent, qui peut jouer à
+/// n'importe quel environnement (choisi à chaque connexion, cf. `Hello`).
 const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS players (
         token        TEXT PRIMARY KEY,

@@ -1,35 +1,36 @@
 //! Point d'entrée du binaire serveur. Toute la logique vit dans `lib.rs` et
-//! ses sous-modules (`auth`, `gateway`, `match_runner`, `matches`) : ce
-//! fichier ne fait qu'assembler la configuration de production et démarrer
-//! l'écoute réseau.
+//! ses sous-modules : ce fichier ne fait qu'assembler la configuration de
+//! production et démarrer l'écoute réseau.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use engine::EngineConfig;
 use server::auth::{AuthProvider, InMemoryAuthProvider, PostgresAuthProvider};
+use server::environments::{describe_environments, WorkerCommand};
 use server::match_runner::MatchRunnerConfig;
 use server::matches::{MatchStore, NullMatchStore, PostgresMatchStore};
 use sqlx::postgres::PgPoolOptions;
 
 // `#[tokio::main]` transforme `async fn main()` en `fn main()` classique qui
-// démarre un runtime tokio (le "scheduler" qui exécute les tâches async) et
-// y lance le corps de la fonction. Sans cette macro, on ne pourrait pas
-// utiliser `.await` directement dans `main`.
+// démarre un runtime tokio et y lance le corps de la fonction.
 #[tokio::main]
 async fn main() {
-    // Initialise `tracing` : permet d'utiliser `tracing::info!`/`debug!`
-    // partout dans le code, avec un affichage formaté sur stdout. Contrôlable
-    // via la variable d'environnement `RUST_LOG` (ex: `RUST_LOG=debug`).
+    // `tracing` : logs formatés sur stdout, filtrables via `RUST_LOG`.
     tracing_subscriber::fmt::init();
 
+    // Les environnements sont décrits par un worker Python au démarrage.
+    // Échec fatal : un serveur sans aucun environnement ne peut rien jouer,
+    // mieux vaut le dire tout de suite que de refuser chaque participant.
+    let worker_command = WorkerCommand::from_env();
+    let catalog = describe_environments(&worker_command)
+        .await
+        .unwrap_or_else(|err| panic!("impossible de décrire les environnements : {err}"));
+    let mut available: Vec<&String> = catalog.keys().collect();
+    available.sort();
+    tracing::info!(environments = ?available, "environnements disponibles");
+
     let (auth, match_store) = build_persistence().await;
-    let state = server::new_app_state(
-        auth,
-        match_store,
-        EngineConfig::default(),
-        MatchRunnerConfig::default(),
-    );
+    let state = server::new_app_state(auth, match_store, catalog, worker_command, MatchRunnerConfig::default());
     let app = server::router(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
@@ -43,18 +44,15 @@ async fn main() {
 }
 
 /// Choisit l'authentification ET la persistance des matchs selon
-/// l'environnement, à partir d'un pool Postgres PARTAGÉ entre les deux (pas
-/// la peine d'ouvrir deux pools séparés vers la même base) :
+/// l'environnement, à partir d'un pool Postgres PARTAGÉ entre les deux :
 /// - `DATABASE_URL` définie => les deux sont adossées à PostgreSQL. Une
 ///   erreur de connexion ici est fatale : si l'opérateur a explicitement
 ///   demandé Postgres, servir quand même en mémoire (donc sans AUCUN token
-///   valide, ni aucune persistance des matchs) serait silencieusement pire
-///   qu'un crash au démarrage.
+///   valide, ni persistance) serait silencieusement pire qu'un crash.
 /// - sinon => authentification en mémoire (table vide, aucun token accepté)
-///   et persistance désactivée (`NullMatchStore`, les matchs restent
-///   jouables mais rien n'est enregistré). Pratique pour un `cargo run`
-///   local rapide ; un avertissement est loggé pour ne pas laisser croire
-///   que c'est un mode de production.
+///   et persistance désactivée. Pratique pour un `cargo run` local rapide ;
+///   un avertissement est loggé pour ne pas laisser croire que c'est un mode
+///   de production.
 async fn build_persistence() -> (Arc<dyn AuthProvider>, Arc<dyn MatchStore>) {
     match std::env::var("DATABASE_URL") {
         Ok(database_url) => {

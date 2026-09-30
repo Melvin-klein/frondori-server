@@ -353,7 +353,7 @@ impl Engine {
                 .iter()
                 .zip(actions[team].players.iter())
             {
-                let dir = vector![action.move_dir.0, action.move_dir.1];
+                let dir = to_field_frame(team, action.move_dir);
                 let norm = dir.norm();
                 let velocity = if norm > 0.0 {
                     (dir / norm) * norm.min(1.0) * self.config.player_max_speed
@@ -382,10 +382,10 @@ impl Engine {
                 .iter()
                 .zip(actions[team].players.iter())
             {
-                let Some((kx, ky)) = action.kick else {
+                let Some(kick) = action.kick else {
                     continue;
                 };
-                let kick_dir = vector![kx, ky];
+                let kick_dir = to_field_frame(team, kick);
                 let power = kick_dir.norm();
                 if power <= 0.0 {
                     continue;
@@ -557,5 +557,22 @@ fn normalize(v: Vector<Real>, half_w: f32, half_h: f32, mirror: bool) -> (f32, f
         (-x, y)
     } else {
         (x, y)
+    }
+}
+
+/// Le symétrique de `normalize` pour les ACTIONS : un vecteur d'action
+/// (`move_dir`, `kick`) est exprimé dans le repère de l'équipe qui l'envoie
+/// — celui de son observation —, et doit être ramené dans le repère réel du
+/// terrain avant d'être appliqué. Pour l'équipe 1, +x veut dire "vers le
+/// but adverse", c'est-à-dire -x sur le vrai terrain.
+///
+/// Sans cette conversion, l'équipe 1 voyait un terrain retourné mais
+/// agissait sur le terrain réel : une politique "j'avance vers +x" fonçait
+/// vers son propre but (bug réel, cf. `tests/action_frame.rs`).
+fn to_field_frame(team: usize, (x, y): (f32, f32)) -> Vector<Real> {
+    if team == 1 {
+        vector![-x, y]
+    } else {
+        vector![x, y]
     }
 }

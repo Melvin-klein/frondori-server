@@ -1,6 +1,6 @@
-//! Persistance des matchs (métadonnées + replay), pour que le site web
-//! (`frondori-web`, MÊME base Postgres, cf. `CLAUDE.md`) puisse lister les
-//! matchs en direct et servir les replays plus tard.
+//! Persistance des matchs (participants, résultats, replay), pour que le
+//! site web (`frondori-web`, MÊME base Postgres) puisse lister les matchs en
+//! direct, servir les replays et calculer les classements.
 //!
 //! Même esprit que `crate::auth` : une abstraction (`MatchStore`), une
 //! implémentation Postgres (`postgres::PostgresMatchStore`), et une
@@ -10,42 +10,73 @@
 pub mod postgres;
 
 use async_trait::async_trait;
-use engine::types::SpectatorFrame;
 
 pub use postgres::PostgresMatchStore;
 
 use crate::match_runner::MatchId;
 
-/// Nom de l'environnement de jeu, tel qu'enregistré en base. En dur pour
-/// l'instant : ce serveur n'implémente qu'un seul jeu (football). À
-/// paramétrer si/quand un second environnement existe (cf. la maquette
-/// `frondori-web`, qui anticipe déjà cette idée).
-pub const ENVIRONMENT: &str = "football";
+/// Un participant au match : quel joueur contrôle quel agent de
+/// l'environnement. `seat` est la position de l'agent dans l'ordre de
+/// l'environnement (0 pour `team_0` / `chef_0`...).
+#[derive(Debug, Clone)]
+pub struct Participant {
+    pub seat: usize,
+    pub agent: String,
+    pub player_id: String,
+}
+
+/// Bilan d'un participant en fin de match.
+#[derive(Debug, Clone)]
+pub struct ParticipantResult {
+    pub seat: usize,
+    /// Somme de ses récompenses sur tout le match.
+    pub final_return: f64,
+    /// Son client s'est déconnecté en cours de match.
+    pub forfeited: bool,
+    /// Dernières informations annexes renvoyées par l'environnement pour cet
+    /// agent (ex. score, statistiques) — propres à chaque environnement.
+    pub final_info: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchStatus {
+    /// Joué jusqu'au bout, ou arrêté par la déconnexion d'un participant
+    /// (`forfeited` dit lequel) : un résultat exploitable.
+    Finished,
+    /// Interrompu par une panne de l'environnement lui-même : aucun
+    /// participant n'est en cause, le résultat ne doit pas compter.
+    Aborted,
+}
+
+impl MatchStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MatchStatus::Finished => "finished",
+            MatchStatus::Aborted => "aborted",
+        }
+    }
+}
 
 /// Abstraction sur la persistance des matchs. `Send + Sync` : même raison
 /// que `AuthProvider`, un `Arc<dyn MatchStore>` est partagé entre toutes les
 /// tâches tokio (une par match).
+///
+/// Aucune de ces méthodes ne renvoie d'erreur : la persistance est un
+/// "bonus", pas une condition pour jouer. Une erreur est loggée en interne
+/// (cf. implémentations), jamais remontée au match.
 #[async_trait]
 pub trait MatchStore: Send + Sync {
-    /// Enregistre le DÉBUT d'un match (statut "live"), avant le premier
-    /// tick. Ne doit jamais empêcher le match de démarrer : une erreur de
-    /// persistance est loggée en interne (cf. implémentations), jamais
-    /// remontée à l'appelant — la persistance est un "bonus", pas une
-    /// condition pour jouer.
-    async fn record_start(&self, match_id: MatchId, home_player_id: &str, away_player_id: &str);
+    /// Enregistre le DÉBUT d'un match (statut "live"), avant le premier tick.
+    async fn record_start(&self, match_id: MatchId, environment: &str, participants: &[Participant]);
 
-    /// Enregistre la FIN d'un match : score final, résultat du point de vue
-    /// de l'équipe "home" (= équipe d'indice 0, la même convention que
-    /// partout ailleurs dans `engine`/`match_runner`), et la séquence
-    /// complète de frames pour permettre un replay plus tard (aucune vidéo
-    /// n'est jamais enregistrée — uniquement ces données).
+    /// Enregistre la FIN d'un match. `replay_json` : le tableau JSON des
+    /// scènes du match, une par pas (aucune vidéo n'est jamais enregistrée).
     async fn record_end(
         &self,
         match_id: MatchId,
-        home_score: u32,
-        away_score: u32,
-        home_outcome: protocol::MatchOutcome,
-        replay: &[SpectatorFrame],
+        status: MatchStatus,
+        results: &[ParticipantResult],
+        replay_json: &str,
     );
 }
 
@@ -55,16 +86,14 @@ pub struct NullMatchStore;
 
 #[async_trait]
 impl MatchStore for NullMatchStore {
-    async fn record_start(&self, _match_id: MatchId, _home_player_id: &str, _away_player_id: &str) {
-    }
+    async fn record_start(&self, _match_id: MatchId, _environment: &str, _participants: &[Participant]) {}
 
     async fn record_end(
         &self,
         _match_id: MatchId,
-        _home_score: u32,
-        _away_score: u32,
-        _home_outcome: protocol::MatchOutcome,
-        _replay: &[SpectatorFrame],
+        _status: MatchStatus,
+        _results: &[ParticipantResult],
+        _replay_json: &str,
     ) {
     }
 }

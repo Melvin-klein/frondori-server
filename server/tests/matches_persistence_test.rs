@@ -1,112 +1,110 @@
 //! Test optionnel : vérifie que `PostgresMatchStore` enregistre bien un
-//! match de bout en bout (statut, score, résultat, replay complet) dans une
-//! VRAIE base PostgreSQL locale. S'auto-ignore (au lieu d'échouer) si
-//! `DATABASE_URL` n'est pas définie, même principe que
-//! `postgres_auth_test.rs`.
+//! match de bout en bout (participants, retours, replay) dans une VRAIE
+//! base PostgreSQL locale. S'auto-ignore si `DATABASE_URL` n'est pas
+//! définie, même principe que `postgres_auth_test.rs`.
 //!
 //! Lancer avec, par exemple :
 //!   DATABASE_URL=postgres://melvine@localhost/frondori cargo test -p server --test matches_persistence_test
 
 mod common;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use engine::config::EngineConfig;
-use server::auth::InMemoryAuthProvider;
-use server::match_runner::MatchRunnerConfig;
 use server::matches::PostgresMatchStore;
 
+use common::{play_match, Behaviour, Outcome};
+
 #[tokio::test]
-async fn finished_match_is_persisted_with_full_replay() {
+async fn finished_match_is_persisted_with_participants_and_replay() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
         eprintln!("DATABASE_URL non définie : test ignoré (pas de PostgreSQL local disponible)");
         return;
     };
-
     let pool = sqlx::PgPool::connect(&database_url)
         .await
         .expect("connexion à PostgreSQL échouée");
-    let match_store = Arc::new(
-        PostgresMatchStore::new(pool.clone())
-            .await
-            .expect("initialisation du schéma `matches` échouée"),
-    );
-
-    let mut tokens = HashMap::new();
-    tokens.insert("token-a".to_string(), "player-a".to_string());
-    tokens.insert("token-b".to_string(), "player-b".to_string());
-    let auth = Arc::new(InMemoryAuthProvider::new(tokens));
-
-    // Match volontairement court : on veut juste vérifier que la
-    // persistance fonctionne, pas rejouer un match complet de 5 minutes.
-    let engine_config = EngineConfig {
-        players_per_team: 1,
-        max_ticks: 5,
-        ..EngineConfig::default()
-    };
-    let state = server::new_app_state(
-        auth,
-        match_store,
-        engine_config,
-        MatchRunnerConfig::default(),
-    );
-    let app = server::router(state);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let store = PostgresMatchStore::new(pool.clone())
         .await
-        .expect("impossible de binder un port de test");
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+        .expect("initialisation du schéma des matchs échouée");
 
-    let agent_url = format!("ws://{addr}/agent");
+    let addr = common::start_test_server_with(Arc::new(store), 1000.0).await;
+    let url = format!("ws://{addr}/agent");
     let (match_id_tx, match_id_rx) = tokio::sync::oneshot::channel();
-    let (end_a, _end_b) = tokio::join!(
-        common::play_dummy_match(agent_url.clone(), "token-a", Some(match_id_tx)),
-        common::play_dummy_match(agent_url, "token-b", None),
+    let first = Behaviour {
+        match_id_tx: Some(match_id_tx),
+        ..Behaviour::default()
+    };
+    let (a, _b) = tokio::join!(
+        play_match(url.clone(), "token-a", "kitchen-v0", first),
+        play_match(url, "token-b", "kitchen-v0", Behaviour::default()),
     );
+    assert!(matches!(a, Outcome::Finished(_)));
     let match_id = match_id_rx.await.expect("le match_id n'a jamais été reçu");
-    assert_eq!(end_a.outcome, protocol::MatchOutcome::Draw);
 
-    // `replay::text` : on lit la colonne JSONB comme du texte brut, qu'on
-    // parse nous-mêmes avec `serde_json` — évite de dépendre de la feature
-    // `json` de `sqlx` (non activée, cf. le commentaire dans `Cargo.toml`),
-    // pour rester cohérent avec l'écriture (`$N::jsonb` côté `postgres.rs`).
-    let row: (String, Option<i32>, Option<i32>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT status, home_score, away_score, home_outcome, replay::text
-         FROM matches WHERE id = $1::uuid",
+    // `record_end` s'exécute juste APRÈS l'envoi du `MatchEnd` aux clients :
+    // on attend qu'il ait eu lieu plutôt que de lire trop tôt.
+    let mut status = String::new();
+    for _ in 0..50 {
+        status = sqlx::query_scalar("SELECT status FROM matches WHERE id = $1::uuid")
+            .bind(&match_id)
+            .fetch_one(&pool)
+            .await
+            .expect("le match n'a pas été trouvé en base");
+        if status != "live" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // `::text` : colonnes JSONB lues en texte et parsées ici, sans dépendre
+    // de la feature `json` de `sqlx` (cf. `Cargo.toml`).
+    let (environment, replay): (String, String) =
+        sqlx::query_as("SELECT environment, replay::text FROM matches WHERE id = $1::uuid")
+            .bind(&match_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut participants: Vec<(i32, String, String, Option<f64>, bool, String)> = sqlx::query_as(
+        "SELECT seat, agent, player_id, final_return, forfeited, final_info::text
+         FROM match_participants WHERE match_id = $1::uuid ORDER BY seat",
     )
     .bind(&match_id)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await
-    .expect("le match n'a pas été trouvé en base après sa fin");
+    .unwrap();
 
-    let (status, home_score, away_score, home_outcome, replay_text) = row;
-
-    // Le nettoyage a lieu APRÈS toutes les vérifications (pas avant) : si
-    // une assertion échoue, la ligne reste en base pour inspection manuelle.
-    let cleanup = async {
-        sqlx::query("DELETE FROM matches WHERE id = $1::uuid")
-            .bind(&match_id)
-            .execute(&pool)
-            .await
-            .expect("échec du nettoyage de la ligne de test");
-    };
+    // Nettoyage juste après la lecture, AVANT les assertions : une assertion
+    // ratée ne laisse ainsi aucun match de test en base. Les participants
+    // suivent via `ON DELETE CASCADE`.
+    sqlx::query("DELETE FROM matches WHERE id = $1::uuid")
+        .bind(&match_id)
+        .execute(&pool)
+        .await
+        .expect("échec du nettoyage du match de test");
 
     assert_eq!(status, "finished");
-    assert_eq!(home_score, Some(0));
-    assert_eq!(away_score, Some(0));
-    assert_eq!(home_outcome.as_deref(), Some("Draw"));
+    assert_eq!(environment, "kitchen-v0");
 
-    let replay_text = replay_text.expect("le replay ne devrait pas être NULL");
-    let frames: serde_json::Value =
-        serde_json::from_str(&replay_text).expect("le replay n'est pas du JSON valide");
-    let frames = frames.as_array().expect("le replay devrait être un tableau");
-    // Une frame initiale (tick 0) + une par tick joué (5 ticks) = 6.
-    assert_eq!(frames.len(), 6, "nombre de frames de replay inattendu");
-    assert!(frames[0].get("players").is_some());
+    // Qui joue quel chef dépend de l'ordre d'arrivée : on vérifie le lien
+    // agent <-> siège, et l'ensemble des joueurs, pas une attribution fixe.
+    assert_eq!(participants.len(), 2);
+    participants.sort_by_key(|p| p.0);
+    assert_eq!((participants[0].0, participants[0].1.as_str()), (0, "chef_0"));
+    assert_eq!((participants[1].0, participants[1].1.as_str()), (1, "chef_1"));
+    let mut players: Vec<&str> = participants.iter().map(|p| p.2.as_str()).collect();
+    players.sort();
+    assert_eq!(players, ["agent-a", "agent-b"]);
+    for (_, _, _, final_return, forfeited, final_info) in &participants {
+        assert_eq!(*final_return, Some(0.0));
+        assert!(!forfeited);
+        // Infos propres à l'environnement, gardées telles quelles.
+        let info: serde_json::Value = serde_json::from_str(final_info).unwrap();
+        assert_eq!(info["served"], 0);
+    }
 
-    cleanup.await;
+    // Une scène initiale + une par pas (200), chacune au format générique.
+    let scenes: serde_json::Value = serde_json::from_str(&replay).expect("replay JSON invalide");
+    let scenes = scenes.as_array().expect("le replay devrait être un tableau");
+    assert_eq!(scenes.len(), 201);
+    assert!(scenes[0]["shapes"].is_array());
 }

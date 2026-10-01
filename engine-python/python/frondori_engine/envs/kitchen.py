@@ -252,7 +252,7 @@ class KitchenEnv(ParallelEnv):
         top = 1
         shapes = [sc.text(
             self._cols / 2, 0.5,
-            f"Servies : {self._served}   Temps : {self._max_steps - self._steps}",
+            f"Served: {self._served}   Time: {self._max_steps - self._steps}",
             size=0.4,
         )]
         for row in range(self._rows):
@@ -264,7 +264,7 @@ class KitchenEnv(ParallelEnv):
                 shapes.append(sc.circle(col + 0.5, row + top + 0.5, 0.2, _ITEM_COLORS[item]))
         for (row, col), (onions, cooking) in self._pots.items():
             if onions == self._onions_needed and cooking == 0:
-                label = "prête"
+                label = "ready"
             elif onions == self._onions_needed:
                 label = str(cooking)
             else:

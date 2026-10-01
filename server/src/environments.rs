@@ -3,7 +3,7 @@
 //! match, qui exécute l'environnement dans un processus séparé.
 //!
 //! Le serveur ne contient AUCUNE règle de jeu : il lance
-//! `python -m frondori_engine.worker` (cf. `engine-python/.../worker.py`) et
+//! `python -m frondori_engine.worker` (dépôt `frondori-engine`) et
 //! lui parle en MessagePack sur son entrée/sortie standard. Un environnement
 //! écrit en Rust (le football) ou en Python (la cuisine) passe par le même
 //! chemin, et un environnement qui plante n'emporte que son propre match.
@@ -40,6 +40,11 @@ pub struct EnvInfo {
     /// documentation du site. `default` : absente, une chaîne vide.
     #[serde(default)]
     pub documentation: String,
+    /// Paquet Python qui fournit l'environnement (ex. `frondori-kitchen`),
+    /// pour que le site affiche la commande d'installation. Vide pour un
+    /// environnement enregistré à la main.
+    #[serde(default)]
+    pub package: String,
     pub observation_spaces: HashMap<String, Value>,
     pub action_spaces: HashMap<String, Value>,
 }
@@ -49,7 +54,9 @@ pub type Catalog = HashMap<String, EnvInfo>;
 
 /// Commande qui lance un worker. Configurable (variable d'environnement
 /// `FRONDORI_ENV_WORKER`), parce que le bon interpréteur Python dépend de la
-/// machine : en dev, celui du venv d'`engine-python`.
+/// machine : en dev, celui du venv `.venv` de ce dépôt (cf.
+/// `scripts/setup-environments.sh`). Les environnements joués sont ceux
+/// installés dans ce Python, et seulement eux.
 #[derive(Debug, Clone)]
 pub struct WorkerCommand {
     pub program: String,

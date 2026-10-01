@@ -26,7 +26,8 @@ use server::matches::{MatchStore, NullMatchStore};
 /// agent, qui peut jouer à n'importe quel environnement.
 const TOKENS: [(&str, &str); 2] = [("token-a", "agent-a"), ("token-b", "agent-b")];
 
-/// Le worker Python des tests : celui du venv d'`engine-python`, sauf si
+/// Le worker Python des tests : celui du venv `.venv` de ce dépôt (préparé
+/// par `scripts/setup-environments.sh`), sauf si
 /// `FRONDORI_ENV_WORKER` en désigne un autre. Les tests jouent donc de VRAIS
 /// environnements, exécutés par de vrais processus — pas un simulacre.
 #[allow(dead_code)]
@@ -35,14 +36,14 @@ pub fn worker_command() -> WorkerCommand {
         return WorkerCommand::parse(&line);
     }
     // `env!("CARGO_MANIFEST_DIR")` : dossier du crate `server`, connu à la
-    // compilation, pour retrouver `engine-python` quel que soit le dossier
+    // compilation, pour retrouver `.venv` à la racine du dépôt quel que soit le dossier
     // depuis lequel on lance `cargo test`.
-    let python = concat!(env!("CARGO_MANIFEST_DIR"), "/../engine-python/.venv/bin/python");
+    let python = concat!(env!("CARGO_MANIFEST_DIR"), "/../.venv/bin/python");
     assert!(
         Path::new(python).exists(),
-        "worker introuvable ({python}) : construire engine-python d'abord \
-         (cd engine-python && python -m venv .venv && source .venv/bin/activate \
-         && pip install maturin && maturin develop), ou définir FRONDORI_ENV_WORKER"
+        "worker introuvable ({python}) : installer les environnements d'abord \
+         (scripts/setup-environments.sh, depuis la racine du dépôt), \
+         ou définir FRONDORI_ENV_WORKER"
     );
     WorkerCommand {
         program: python.to_string(),

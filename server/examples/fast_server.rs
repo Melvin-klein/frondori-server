@@ -11,7 +11,7 @@
 //! - `FRONDORI_ENV_WORKER` : commande du worker (cf. `environments.rs`).
 //!
 //! Écoute sur 127.0.0.1:8081. Lancer avec :
-//!   FRONDORI_ENV_WORKER="engine-python/.venv/bin/python -m frondori_engine.worker" \
+//!   FRONDORI_ENV_WORKER="$PWD/.venv/bin/python -m frondori_engine.worker" \
 //!     cargo run -p server --example fast_server
 
 use std::collections::HashMap;

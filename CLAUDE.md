@@ -9,107 +9,42 @@ simple à maintenir, et ajouter un environnement sans toucher au serveur.
 
 ## Vue d'ensemble
 
-Un workspace Cargo de quatre crates. Le SDK de compétition vit dans un dépôt
-séparé (`frondori-sdk-python`), et le site dans `frondori-web` (Laravel, même
-base Postgres).
+Plusieurs dépôts, en dossiers frères (`~/Code/Frondori/`) :
 
 ```
-frondori-server/
-├── engine/         moteur physique du football (rapier2d), pur, sans réseau
-├── engine-python/  LES environnements (PettingZoo) + le worker qui les exécute
-│                   pour le serveur ; publié sur PyPI (`frondori-engine`)
-├── protocol/       messages serveur <-> SDK, encodage MessagePack, AUCUN jeu
-├── server/         gateway (auth + matchmaking) + match runner, AUCUNE règle de jeu
-└── viewer/         visionneuse spectateur locale (HTML statique, tout environnement)
+frondori-server/     CE dépôt : protocole + serveur (gateway, match runner), AUCUN jeu
+├── protocol/        messages serveur <-> SDK, encodage MessagePack
+├── server/          gateway (auth + matchmaking) + match runner
+├── scripts/         setup-environments.sh : le Python du worker (.venv)
+└── viewer/          visionneuse spectateur locale (HTML statique, tout environnement)
+frondori-engine/     le contrat commun des environnements (registre, scènes, spaces, worker, tests du contrat)
+frondori-football/   football-v0 : moteur Rust (crate engine) + bindings PyO3 + environnement
+frondori-kitchen/    kitchen-v0 : cuisine coopérative, Python pur
+frondori-sdk-python/ SDK des participants (en ligne, ou local=True)
+frondori-web/        le site (Laravel, même base Postgres)
 ```
+
+**Chaque environnement est un paquet Python indépendant**, dans son propre
+dépôt, déclaré par un *entry point* (groupe `frondori.environments`) et
+découvert automatiquement par `frondori-engine`. Un chercheur n'installe que
+ceux qui l'intéressent ; le contrat et ses pièges sont documentés dans le
+`CLAUDE.md` de `frondori-engine`, le moteur du football dans celui de
+`frondori-football`.
 
 **Le serveur ne contient aucune règle de jeu.** Chaque match lance un
 worker Python (`python -m frondori_engine.worker`, un processus par match)
 qui exécute l'environnement ; le serveur relaie observations et actions
-entre les participants et ce worker. Le football (Rust) y passe comme les
-autres, via ses bindings PyO3 : coût mesuré ~0,2 ms par pas, 0,6 % du budget
-d'un tick à 30 Hz. `server` ne dépend plus du crate `engine`.
+entre les participants et ce worker. Le serveur propose exactement les
+environnements installés dans le Python de ce worker (`.venv` de ce dépôt,
+préparé par `scripts/setup-environments.sh` avec les dépôts frères en mode
+éditable) : ajouter un jeu = l'installer là, redémarrer le serveur. Le
+football (Rust) passe par le même chemin, via ses bindings PyO3 : ~0,2 ms par
+pas. Le catalogue publié (table `environments`) indique le paquet de chaque
+environnement (`package`), que le site affiche en commande `pip install`.
 
-## `engine-python` — les environnements
-
-Projet mixte Rust + Python (maturin) : le paquet public est
-`python/frondori_engine/`, le module natif `frondori_engine._football`
-(compilé depuis `src/lib.rs`) n'est qu'un détail d'implémentation du football.
-
-**Le contrat commun, c'est PettingZoo** (`ParallelEnv`, spaces Gymnasium).
-Tout environnement :
-- est enregistré sous un identifiant versionné `nom-vN` (`registry.py`).
-  Changer des règles = publier `nom-v(N+1)`, jamais modifier `nom-vN`
-  (reproductibilité des résultats, replays et classements) ;
-- déclare sa cadence en compétition dans `metadata["render_fps"]` (pas par
-  seconde : 30 pour le football, 5 pour la cuisine) — un PLANCHER de durée
-  par pas, les matchs se jouant en pas-à-pas (cf. `match_runner`) ;
-- déclare son budget de calcul par action, `metadata["compute_budget_ms"]`
-  (30 ms au football, 200 ms en cuisine) ;
-- déclare `metadata["title"]`, `metadata["description"]` (affichés par le
-  site), `metadata["documentation"]` (ses règles, en anglais et en Markdown
-  simple : publiées avec le catalogue et affichées par la page
-  Documentation > Environments du site) et `metadata["ranking"]` : `"elo"` (duel à 2 agents uniquement — le
-  vainqueur est l'agent au meilleur retour) ou `"mean_return"` (retour moyen
-  par match). Vérifié par le contrat et par `worker._describe` ;
-- peut renvoyer dans ses infos une clé `score` : convention que le site
-  affiche comme score du match (le football y met ses buts marqués) ; à
-  défaut, le site affiche le retour. Toutes les infos numériques finales
-  apparaissent dans les statistiques de la page de match ;
-- se rend via `render_mode="scene"` : primitives génériques rect/cercle/texte
-  en JSON (`scene.py`), qu'un seul afficheur dessine pour tous les jeux ;
-- doit être conçu pour que l'élément « zéro » de son `action_space` soit une
-  action sans effet : c'est l'action neutre jouée quand un agent ne répond
-  pas à temps ou envoie une action invalide (`wire.neutral_action`) ;
-- est couvert automatiquement par `tests/test_contract.py` dès son
-  `register(...)`. **Piège** : le `parallel_api_test` officiel ne vérifie PAS
-  l'appartenance des observations à leur space (constaté avec un contrôle
-  négatif) — d'où le test explicite.
-
-Ajouter un environnement = un module dans `envs/` + une ligne `register(...)`
-dans `__init__.py` (guide complet, avec un exemple vérifié : Documentation >
-Create an Environment sur le site). **Piège** : `observation_space(agent)` et
-`action_space(agent)` doivent renvoyer le MÊME objet à chaque appel (le
-`parallel_api_test` de PettingZoo le vérifie) — créer les spaces dans
-`__init__`. Rien à changer dans `protocol`, `server` ni le SDK.
-
-**Worker** (`worker.py`) : piloté par le serveur sur stdin/stdout, trames
-MessagePack préfixées de leur taille (4 octets big-endian). Commandes
-`describe` (catalogue, appelée une fois au démarrage du serveur), `start`,
-`step`. Il valide chaque action contre l'`action_space` (un agent n'est pas
-de confiance) et redirige tout `print` d'un environnement vers stderr pour
-ne pas corrompre le protocole. `wire.py` fixe le format des spaces et des
-valeurs sur le fil — le SDK en implémente l'autre moitié : toute
-modification doit y être reportée.
-
-`.cargo/config.toml` ajoute des flags de lien macOS : sans eux, la feature
-`extension-module` de PyO3 casse `cargo build/test --workspace` sur macOS.
-Un simple `cargo build -p engine-python` ne produit pas un module
-importable : toujours passer par `maturin develop`.
-
-## `engine` — moteur du football
-
-API façon Gym : `Engine::new(config, seed)`, puis `reset()` /
-`step(actions)`. **Déterminisme total** exigé : même seed + mêmes actions =
-même résultat, tick pour tick (rapier2d + RNG seedé, jamais de
-`rand::thread_rng()` dans la logique de simulation elle-même).
-
-Décisions à connaître avant de toucher à `engine/src/sim.rs` :
-- **1 agent = 1 équipe** : `Actions` transporte les actions de TOUS les
-  joueurs d'une équipe.
-- **Repère miroir, pour les observations ET les actions** : chaque équipe
-  voit `self_team` comme la sienne, attaque vers `x = +1`, et ses actions
-  sont exprimées dans ce même repère (`normalize` pour les observations,
-  `to_field_frame` pour les actions). Bug réel corrigé : l'équipe 1 avait des
-  observations mirrorées mais pas ses actions, et marquait contre son camp
-  (trouvé en faisant jouer la même politique aux deux équipes en réseau :
-  113-0 ; cf. `tests/action_frame.rs`).
-- **Pas de murs sur les lignes de but** : un but est détecté "à la main"
-  après chaque pas de physique (`resolve_ball_bounds`).
-- **Formation de coup d'envoi** : le joueur n°0 de chaque équipe démarre
-  juste à côté du ballon, face à l'adversaire. Un tir immédiat, ou deux
-  joueurs qui avancent tout droit, se percutent — les tests dégagent d'abord
-  le couloir (cf. `goal_detection.rs`, `action_frame.rs`).
+Sécurité : le code d'un environnement s'exécute sur le serveur ; l'isolation
+par processus protège des plantages, pas d'un code malveillant — n'installer
+que des paquets relus.
 
 ## `protocol` — messages réseau
 
@@ -141,7 +76,7 @@ d'intégration de démarrer un vrai serveur en mémoire) :
 **`environments`** (`src/environments.rs`) : catalogue + pilotage d'un
 worker (`EnvWorker`, `kill_on_drop` : jamais de worker orphelin). Commande
 configurable via `FRONDORI_ENV_WORKER` (défaut `python3 -m
-frondori_engine.worker` ; en dev, le python du venv d'`engine-python`).
+frondori_engine.worker` ; en dev, le `.venv` de ce dépôt, cf. `scripts/`).
 
 **`gateway`** (`src/gateway/`) : handshake + matchmaking FIFO. **Le client
 choisit l'environnement à chaque connexion** (`Hello.environment`) : un
@@ -223,7 +158,7 @@ not exist` — toujours mettre l'utilisateur dans l'URL :
 
 ```bash
 export DATABASE_URL="postgres://melvine@localhost/frondori"
-export FRONDORI_ENV_WORKER="$PWD/engine-python/.venv/bin/python -m frondori_engine.worker"
+export FRONDORI_ENV_WORKER="$PWD/.venv/bin/python -m frondori_engine.worker"
 cargo run -p server --bin manage-tokens -- add <token> <player_id> "<nom>"
 cargo run -p server --bin frondori-server
 ```
@@ -231,16 +166,16 @@ cargo run -p server --bin frondori-server
 ## Commandes utiles
 
 ```bash
-# Prérequis des tests serveur : le venv d'engine-python construit (les tests
-# jouent de VRAIS environnements via de vrais workers).
-cd engine-python && python -m venv .venv && source .venv/bin/activate \
-  && pip install maturin && maturin develop && cd ..
+# Prérequis des tests serveur : le Python du worker, avec les environnements
+# des dépôts frères (les tests jouent de VRAIS environnements via de vrais
+# workers). Le football se compile : toolchain Rust requise.
+scripts/setup-environments.sh
 
 cargo test --workspace
 DATABASE_URL="postgres://melvine@localhost/frondori" cargo test --workspace
 
-cd engine-python && source .venv/bin/activate && python -m pytest
-python examples/random_agent.py kitchen-v0
+# Chaque environnement, et frondori-engine, se testent dans leur dépôt :
+cd ../frondori-kitchen && python -m pytest
 ```
 
 ## État du projet / ce qui reste
@@ -255,6 +190,20 @@ annule un match coopératif, un match `aborted` ne compte jamais), rendu
 générique des scènes (`resources/js/lib/scene.js`), archives de match
 (`match.json` avec les spaces + `replay.json`). Validé de bout en bout :
 vrais clients SDK -> `fast_server` + Postgres -> classements -> pages.
+
+Environnements sortis du serveur (fait) : un dépôt et un paquet par
+environnement (`frondori-football`, `frondori-kitchen`), découverts par entry
+points via `frondori-engine` ; le SDK joue aussi en local (`local=True`,
+mêmes conditions qu'en compétition). Validé : un venv avec la seule cuisine
+ne voit que `kitchen-v0` ; match local (13 soupes, comme en ligne) ; serveur
+réel jouant les environnements externes ; paquet d'exemple créé en suivant
+la documentation.
+
+Pas encore fait : publication sur PyPI (wheels précompilées du football :
+CI multi-plateformes), dépôts GitHub, adresse définitive du serveur (le SDK
+a une adresse provisoire, `DEFAULT_URL`, surchargeable par `FRONDORI_URL`).
+La seed d'un match n'est pas enregistrée et les actions non plus : un match
+n'est pas rejouable à l'identique.
 
 Hors scope pour l'instant : règles avancées du football (hors-jeu, fautes),
 reconnexion en cours de match, CI.

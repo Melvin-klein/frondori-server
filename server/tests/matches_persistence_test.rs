@@ -189,6 +189,11 @@ async fn the_environment_catalog_is_published_for_the_website() {
             .await
             .unwrap();
     assert!(documentation.contains("## Recipe"), "documentation non publiée : {documentation:.80}");
+    let package: Option<String> = sqlx::query_scalar("SELECT package FROM environments WHERE id = 'kitchen-v0'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(package.as_deref(), Some("frondori-kitchen"));
     let spaces: serde_json::Value = serde_json::from_str(action_spaces).unwrap();
     assert_eq!(spaces["chef_0"], serde_json::json!({"type": "discrete", "n": 6, "start": 0}));
     assert_eq!(ball_low, r#"["-inf", "-inf", "-inf", "-inf"]"#);

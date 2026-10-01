@@ -27,7 +27,7 @@ use crate::match_runner::MatchId;
 /// Colonnes ajoutées après coup : par `ALTER TABLE ... ADD COLUMN IF NOT
 /// EXISTS`, sans danger lui aussi à ré-exécuter, et qui n'efface rien d'une
 /// base existante.
-const SCHEMA: [&str; 8] = [
+const SCHEMA: [&str; 9] = [
     "CREATE TABLE IF NOT EXISTS environments (
         id                 TEXT PRIMARY KEY,
         title              TEXT NOT NULL,
@@ -63,6 +63,8 @@ const SCHEMA: [&str; 8] = [
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS compute_budget_ms DOUBLE PRECISION",
     // Règles détaillées de l'environnement (Markdown), pour la documentation.
     "ALTER TABLE environments ADD COLUMN IF NOT EXISTS documentation TEXT",
+    // Paquet Python à installer pour jouer à l'environnement en local.
+    "ALTER TABLE environments ADD COLUMN IF NOT EXISTS package TEXT",
     // Bilan des temps de réponse de chaque participant, et le détail pas par
     // pas (cf. `match_runner::timing`).
     "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS timing JSONB",
@@ -145,13 +147,14 @@ impl PostgresMatchStore {
         for (id, info) in catalog {
             sqlx::query(
                 "INSERT INTO environments
-                     (id, title, description, documentation, ranking, agents, tick_rate, compute_budget_ms,
-                      observation_spaces, action_spaces, available, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10::jsonb, true, now())
+                     (id, title, description, documentation, package, ranking, agents, tick_rate,
+                      compute_budget_ms, observation_spaces, action_spaces, available, updated_at)
+                 VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, true, now())
                  ON CONFLICT (id) DO UPDATE SET
                      title = EXCLUDED.title,
                      description = EXCLUDED.description,
                      documentation = EXCLUDED.documentation,
+                     package = EXCLUDED.package,
                      ranking = EXCLUDED.ranking,
                      agents = EXCLUDED.agents,
                      tick_rate = EXCLUDED.tick_rate,
@@ -165,6 +168,7 @@ impl PostgresMatchStore {
             .bind(&info.title)
             .bind(&info.description)
             .bind(&info.documentation)
+            .bind(&info.package)
             .bind(&info.ranking)
             .bind(json(&info.agents))
             .bind(info.tick_rate)

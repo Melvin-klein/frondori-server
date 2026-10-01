@@ -5,15 +5,11 @@
 # (frondori-server, manage-tokens), pas juste des bibliothèques — on veut des
 # builds reproductibles, pas une résolution de dépendances qui dérive.
 
-# Python (engine-python bindings, built via maturin)
+# Python : le venv du worker (scripts/setup-environments.sh)
 **/__pycache__/
 **/*.egg-info/
 **/.venv/
 *.pyc
-/engine-python/target/
-# Module natif compilé que `maturin develop` dépose dans le paquet source.
-*.so
-*.pyd
 
 # macOS
 .DS_Store

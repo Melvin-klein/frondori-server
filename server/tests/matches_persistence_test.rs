@@ -183,6 +183,12 @@ async fn the_environment_catalog_is_published_for_the_website() {
     let (id, ranking, title, available, action_spaces) = &rows[1];
     assert_eq!((id.as_str(), ranking.as_str(), *available), ("kitchen-v0", "mean_return", true));
     assert_eq!(title, "Cooperative Kitchen");
+    let documentation: String =
+        sqlx::query_scalar("SELECT documentation FROM environments WHERE id = 'kitchen-v0'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(documentation.contains("## Recipe"), "documentation non publiée : {documentation:.80}");
     let spaces: serde_json::Value = serde_json::from_str(action_spaces).unwrap();
     assert_eq!(spaces["chef_0"], serde_json::json!({"type": "discrete", "n": 6, "start": 0}));
     assert_eq!(ball_low, r#"["-inf", "-inf", "-inf", "-inf"]"#);

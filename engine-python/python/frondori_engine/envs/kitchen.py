@@ -61,6 +61,64 @@ _ITEM_COLORS = {ONION: "#eab308", DISH: "#64748b", SOUP: "#f97316"}
 _CHEF_COLORS = ("#3b82f6", "#ef4444")
 
 
+DOCUMENTATION = """\
+Two chefs share a small kitchen and must serve as many soups as possible **together**: both agents always receive exactly the same reward. A grid world with discrete actions, no physics.
+
+## Kitchen
+
+```
+X X P X X
+O 1 . 2 S
+X . . . X
+X D X X X
+```
+
+`X` counter, `O` onion supply, `P` pot, `D` dish supply, `S` serving window, `.` floor; `1` and `2` are the starting cells of `chef_0` and `chef_1`.
+
+## Recipe
+
+1. Take an onion from the supply (`O`) and put it in the pot (`P`). Two onions start the cooking.
+2. The soup cooks for 5 steps.
+3. Take a dish (`D`), pick up the ready soup from the pot.
+4. Bring the soup to the serving window (`S`): **+1 for both chefs**.
+
+Counters (`X`) can hold one item: put one down with empty counter and full hands, pick it up with empty hands — a way to pass items to your partner. Items are never swapped.
+
+## Match
+
+200 steps. Each step, both chefs move at the same time; a chef cannot move into the cell its partner occupied at the start of the step, nor into the same cell as its partner, so the two can never swap places.
+
+## Observation
+
+A `Dict`, always from the receiving chef's point of view:
+
+- `self`, `partner`: `[row, column, orientation, held item]`.
+- `pots`: one row per pot, `[onions, cooking steps left]`.
+- `counters`: the item on each counter.
+- `time_remaining`: steps left.
+
+Items: `0` nothing, `1` onion, `2` dish, `3` soup. Orientations: `0` up, `1` down, `2` left, `3` right. Pots and counters are listed in reading order of the layout (row by row, left to right).
+
+## Action
+
+`Discrete(6)`: `0` stay, `1` up, `2` down, `3` left, `4` right, `5` interact with the cell you face. Moving towards a cell you cannot walk on only turns you in that direction.
+
+The neutral action, played when yours is invalid, too slow or missing, is `0` (stay).
+
+## Rewards and ranking
+
+`+1` for both chefs per soup served. Agents are ranked by their mean return per match; a match cut short by a forfeit does not count.
+
+## Final infos
+
+- `served`: soups served during the match.
+
+## Local parameters
+
+Locally, `frondori_engine.make("kitchen-v0", ...)` accepts `layout`, `onions_needed`, `cook_time` and `max_steps`. Competition matches always use the defaults.
+"""
+
+
 class KitchenEnv(ParallelEnv):
     # `render_fps` : cadence d'un match en compétition. 5 pas par seconde,
     # soit 200 ms de réflexion par décision et 40 s pour un épisode complet.
@@ -70,6 +128,9 @@ class KitchenEnv(ParallelEnv):
         "description": "Two chefs share a kitchen and must serve as many soups as possible together.",
         # Coopératif : classement au retour moyen par match, pas d'ELO.
         "ranking": "mean_return",
+        # Règles détaillées, en anglais, publiées avec le catalogue et
+        # affichées par le site (Documentation > Environments).
+        "documentation": DOCUMENTATION,
         "render_modes": ["scene"],
         "render_fps": 5,
         # Temps de calcul accordé à un agent pour chaque action, en

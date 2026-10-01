@@ -38,6 +38,57 @@ from pettingzoo import ParallelEnv
 from frondori_engine import _football
 from frondori_engine import scene as sc
 
+DOCUMENTATION = """\
+Two teams of three players face off on a 40 × 20 m pitch. Each agent controls a **whole team**: it receives one observation for its team and sends one action covering all of its players.
+
+## Match
+
+- 30 steps per second of game time; a match lasts **9,000 steps** (5 minutes of game time). There is no score limit.
+- Kickoff: players line up in formation, the first player of each team right next to the ball, facing the opponent. The other players get a small random offset (reproducible with the seed).
+- After a goal, everyone goes back to the kickoff formation.
+- The side lines are walls: the ball bounces off them. A ball that crosses a goal line outside the goal is put back on the line, at rest. Players cannot leave the pitch.
+
+## Your point of view
+
+Observations and actions are **mirrored**: whichever side you actually play on, your team is `self_team` and you always attack towards `x = +1`. The same policy therefore works for both teams.
+
+## Observation
+
+A `Dict` of `float32` arrays:
+
+- `self_team` — shape `(3, 4)`: one row per player, `[x, y, vx, vy]`, always in the same player order.
+- `opponent_team` — shape `(3, 4)`, same format.
+- `ball` — shape `(4,)`, same format.
+- `score` — shape `(2,)`: `[your goals, opponent goals]`.
+- `ticks_remaining` — shape `(1,)`: steps left in the match.
+
+Positions are normalized: `x = -1` is your own goal line, `x = +1` the opponent's, `y = ±1` the side lines. Velocities use the same scale (half pitch lengths per second).
+
+## Action
+
+A `Box` of shape `(3, 5)`, one row per player, in the same order as `self_team`: `[move_x, move_y, kick_x, kick_y, kick_flag]`.
+
+- `move_x, move_y` in `[-1, 1]`: running direction; its length sets the speed, up to 6 m/s at length 1.
+- `kick_x, kick_y` in `[-1, 1]`: kick direction; its length sets the power, up to 12 m/s added to the ball.
+- `kick_flag` in `[0, 1]`: the player kicks when it is above `0.5` — only if the ball is within reach (1.1 m between centers).
+
+The neutral action, played when yours is invalid, too slow or missing, is all zeros: players stop, nobody kicks.
+
+## Rewards
+
+`+1` on the step your team scores, `-1` on the step it concedes. Your return over a match is your goal difference; the higher return wins the duel.
+
+## Final infos
+
+- `score`: goals scored (shown as the match score).
+- `possession`: share of steps where one of your players was the closest to the ball — an approximation, the engine has no notion of ball control.
+
+## Local parameters
+
+Locally, `frondori_engine.make("football-v0", ...)` accepts `players_per_team`, `max_ticks`, `max_score`, `field_width`, `field_height`, `goal_width`, `player_max_speed`, `kick_max_speed`, `kick_range` and other engine settings. Competition matches always use the defaults.
+"""
+
+
 _TEAM_COLORS = ("#3b82f6", "#ef4444")
 
 
@@ -48,6 +99,9 @@ class FootballEnv(ParallelEnv):
         "description": "Two teams face off on a 2D pitch: each agent controls a whole team.",
         # Duel : classement ELO, le vainqueur étant l'équipe au meilleur retour.
         "ranking": "elo",
+        # Règles détaillées, en anglais, publiées avec le catalogue et
+        # affichées par le site (Documentation > Environments).
+        "documentation": DOCUMENTATION,
         # Temps de calcul accordé à un agent pour chaque action, en
         # compétition (le réseau n'est pas compté : matchs en pas-à-pas).
         # Environ un pas de simulation (30 pas/s).

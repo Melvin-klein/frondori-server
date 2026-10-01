@@ -58,6 +58,8 @@ def test_declares_how_agents_are_ranked(env_id):
     if env.metadata["ranking"] == "elo":
         assert len(env.possible_agents) == 2
     assert env.metadata["title"]
+    # Règles en Markdown, affichées telles quelles par le site.
+    assert env.metadata["documentation"].strip()
 
 
 @pytest.mark.parametrize("env_id", ENV_IDS)

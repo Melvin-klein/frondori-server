@@ -47,7 +47,9 @@ Tout environnement :
 - déclare son budget de calcul par action, `metadata["compute_budget_ms"]`
   (30 ms au football, 200 ms en cuisine) ;
 - déclare `metadata["title"]`, `metadata["description"]` (affichés par le
-  site) et `metadata["ranking"]` : `"elo"` (duel à 2 agents uniquement — le
+  site), `metadata["documentation"]` (ses règles, en anglais et en Markdown
+  simple : publiées avec le catalogue et affichées par la page
+  Documentation > Environments du site) et `metadata["ranking"]` : `"elo"` (duel à 2 agents uniquement — le
   vainqueur est l'agent au meilleur retour) ou `"mean_return"` (retour moyen
   par match). Vérifié par le contrat et par `worker._describe` ;
 - peut renvoyer dans ses infos une clé `score` : convention que le site
@@ -65,7 +67,11 @@ Tout environnement :
   négatif) — d'où le test explicite.
 
 Ajouter un environnement = un module dans `envs/` + une ligne `register(...)`
-dans `__init__.py`. Rien à changer dans `protocol`, `server` ni le SDK.
+dans `__init__.py` (guide complet, avec un exemple vérifié : Documentation >
+Create an Environment sur le site). **Piège** : `observation_space(agent)` et
+`action_space(agent)` doivent renvoyer le MÊME objet à chaque appel (le
+`parallel_api_test` de PettingZoo le vérifie) — créer les spaces dans
+`__init__`. Rien à changer dans `protocol`, `server` ni le SDK.
 
 **Worker** (`worker.py`) : piloté par le serveur sur stdin/stdout, trames
 MessagePack préfixées de leur taille (4 octets big-endian). Commandes

@@ -36,6 +36,10 @@ pub struct EnvInfo {
     /// Nom et description lisibles, affichés par le site.
     pub title: String,
     pub description: String,
+    /// Règles détaillées (Markdown, en anglais), affichées par la
+    /// documentation du site. `default` : absente, une chaîne vide.
+    #[serde(default)]
+    pub documentation: String,
     pub observation_spaces: HashMap<String, Value>,
     pub action_spaces: HashMap<String, Value>,
 }

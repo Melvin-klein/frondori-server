@@ -132,6 +132,7 @@ def _describe(env_id: str) -> dict:
         "compute_budget_ms": float(budget),
         "title": env.metadata.get("title", env_id),
         "description": env.metadata.get("description", ""),
+        "documentation": env.metadata.get("documentation", ""),
         "observation_spaces": {agent: wire.space_to_spec(env.observation_space(agent)) for agent in env.possible_agents},
         "action_spaces": {agent: wire.space_to_spec(env.action_space(agent)) for agent in env.possible_agents},
     }

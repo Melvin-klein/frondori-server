@@ -66,8 +66,8 @@ class KitchenEnv(ParallelEnv):
     # soit 200 ms de réflexion par décision et 40 s pour un épisode complet.
     metadata = {
         "name": "kitchen_v0",
-        "title": "Cuisine coopérative",
-        "description": "Deux chefs partagent une cuisine et doivent servir un maximum de soupes ensemble.",
+        "title": "Cooperative Kitchen",
+        "description": "Two chefs share a kitchen and must serve as many soups as possible together.",
         # Coopératif : classement au retour moyen par match, pas d'ELO.
         "ranking": "mean_return",
         "render_modes": ["scene"],

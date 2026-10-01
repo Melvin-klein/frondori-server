@@ -166,7 +166,7 @@ async fn the_environment_catalog_is_published_for_the_website() {
     assert_eq!((id.as_str(), ranking.as_str(), *available), ("football-v0", "elo", true));
     let (id, ranking, title, available, action_spaces) = &rows[1];
     assert_eq!((id.as_str(), ranking.as_str(), *available), ("kitchen-v0", "mean_return", true));
-    assert_eq!(title, "Cuisine coopérative");
+    assert_eq!(title, "Cooperative Kitchen");
     let spaces: serde_json::Value = serde_json::from_str(action_spaces).unwrap();
     assert_eq!(spaces["chef_0"], serde_json::json!({"type": "discrete", "n": 6, "start": 0}));
     assert_eq!(ball_low, r#"["-inf", "-inf", "-inf", "-inf"]"#);

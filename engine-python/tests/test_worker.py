@@ -53,7 +53,7 @@ def test_describe_lists_every_registered_environment(worker):
     assert kitchen["tick_rate"] == 5.0
     assert kitchen["action_spaces"]["chef_0"] == {"type": "discrete", "n": 6, "start": 0}
     assert kitchen["ranking"] == "mean_return"
-    assert kitchen["title"] == "Cuisine coopérative"
+    assert kitchen["title"] == "Cooperative Kitchen"
     assert environments["football-v0"]["ranking"] == "elo"
     football = environments["football-v0"]
     assert football["tick_rate"] == 30.0

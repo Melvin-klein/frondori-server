@@ -45,7 +45,7 @@ class FootballEnv(ParallelEnv):
     metadata = {
         "name": "football_v0",
         "title": "Football 2D",
-        "description": "Deux équipes s'affrontent sur un terrain 2D : chaque agent contrôle une équipe entière.",
+        "description": "Two teams face off on a 2D pitch: each agent controls a whole team.",
         # Duel : classement ELO, le vainqueur étant l'équipe au meilleur retour.
         "ranking": "elo",
         "render_modes": ["scene"],

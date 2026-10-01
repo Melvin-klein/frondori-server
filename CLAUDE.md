@@ -160,7 +160,10 @@ neutre (côté worker).
   le participant). Le serveur le confronte au temps de réponse qu'il mesure
   et à l'aller-retour réseau (`Ping` envoyés pendant le match, juste après
   que tous ont répondu) : un temps inexpliqué médian > 50 ms = `suspect`
-  (loggé, affiché sur le site, mais le match compte). Dissuasion, pas
+  (loggé, affiché sur le site, mais le match compte). Côté site, un agent
+  avec plus de 3 matchs suspects (tous environnements) porte un label
+  "Timing inconsistencies" (`Agent::SUSPECT_MATCHES_THRESHOLD`) : il
+  informe, il n'exclut rien du classement (choix de l'utilisateur). Dissuasion, pas
   preuve : un client modifié peut aussi retarder ses `Pong`. Bilan
   (`timing`) et détail pas par pas (`step_timings`) enregistrés par
   participant : ce sont aussi des données de recherche.

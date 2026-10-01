@@ -80,17 +80,31 @@ pub struct MatchStart {
     pub agents: Vec<String>,
     pub observation_space: Value,
     pub action_space: Value,
+    /// Temps de calcul accordé à l'agent pour chaque action, en
+    /// millisecondes (déclaré par l'environnement). Le match se joue en
+    /// pas-à-pas : le serveur attend l'action de chaque agent avant
+    /// d'avancer, la latence réseau ne coûte donc rien ; c'est ce temps de
+    /// calcul, mesuré et déclaré par le client (`ActionMessage::compute_ms`),
+    /// qui est limité.
+    pub compute_budget_ms: f64,
 }
 
-/// Action de l'agent pour un tick. Une action absente (délai dépassé) ou
-/// invalide pour l'`action_space` est remplacée par l'action neutre de
-/// l'environnement : jamais une erreur fatale pour le match.
+/// Action de l'agent pour un tick. Une action invalide pour l'`action_space`,
+/// calculée en plus que le budget, ou jamais arrivée, est remplacée par
+/// l'action neutre de l'environnement : jamais une erreur fatale pour le
+/// match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionMessage {
-    /// Numéro du tick auquel cette action répond, pour permettre au client
-    /// de détecter un décalage.
+    /// Numéro du tick (de l'observation) auquel cette action répond. Une
+    /// action pour un autre tick est ignorée.
     pub tick: u32,
     pub action: Value,
+    /// Temps que le client a mis à produire cette action, en millisecondes :
+    /// de la réception de l'observation à l'envoi de l'action, réseau exclu.
+    /// Déclaré par le client, donc non vérifiable directement : le serveur
+    /// le confronte à ses propres mesures (temps de réponse, aller-retour
+    /// réseau) pour repérer les déclarations incohérentes.
+    pub compute_ms: f64,
 }
 
 /// Ce qu'il est advenu de l'action que l'agent devait envoyer pour le tick
@@ -108,7 +122,11 @@ pub enum ActionStatus {
     /// Reçue, mais invalide pour l'`action_space` : l'action neutre a été
     /// appliquée à la place.
     Rejected,
-    /// Pas reçue à temps : l'action neutre a été appliquée.
+    /// Calculée en plus que le budget (`MatchStart::compute_budget_ms`) :
+    /// l'action neutre a été appliquée à la place.
+    TooSlow,
+    /// Jamais reçue (client planté ou déconnecté, au-delà du délai réseau
+    /// du serveur) : l'action neutre a été appliquée.
     Missing,
 }
 
@@ -241,6 +259,24 @@ mod tests {
         assert_eq!(decoded.observation, observation);
         assert_eq!(decoded.last_action, ActionStatus::Rejected);
         assert!(decoded.truncated);
+    }
+
+    /// Le temps de calcul déclaré voyage avec l'action, sous son nom de
+    /// champ (c'est ce que lit le serveur, et ce qu'écrivent les SDK).
+    #[test]
+    fn an_action_carries_its_compute_time() {
+        let message = ClientMessage::Action(ActionMessage {
+            tick: 3,
+            action: Value::from(5),
+            compute_ms: 12.5,
+        });
+
+        let raw: Value = decode(&encode(&message).unwrap()).unwrap();
+
+        let fields = raw.as_map().unwrap()[0].1.as_map().unwrap();
+        let compute = fields.iter().find(|(key, _)| key.as_str() == Some("compute_ms")).unwrap();
+        assert_eq!(compute.1.as_f64(), Some(12.5));
+        assert_eq!(encode(&ActionStatus::TooSlow).unwrap(), encode(&"TooSlow").unwrap());
     }
 
     /// Un enum sans données doit arriver comme une simple chaîne : c'est ce

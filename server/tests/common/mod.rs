@@ -56,6 +56,17 @@ pub fn worker_command() -> WorkerCommand {
 /// de seconde au lieu de minutes.
 #[allow(dead_code)]
 pub async fn start_test_server_with(match_store: Arc<dyn MatchStore>, tick_rate: f64) -> SocketAddr {
+    let config = MatchRunnerConfig {
+        tick_rate_override: Some(tick_rate),
+        ..MatchRunnerConfig::default()
+    };
+    start_test_server_with_config(match_store, config).await
+}
+
+/// Comme `start_test_server_with`, avec une configuration de boucle de match
+/// complète (ex. un délai réseau court).
+#[allow(dead_code)]
+pub async fn start_test_server_with_config(match_store: Arc<dyn MatchStore>, config: MatchRunnerConfig) -> SocketAddr {
     let tokens: HashMap<String, String> = TOKENS
         .iter()
         .map(|(token, player_id)| (token.to_string(), player_id.to_string()))
@@ -65,10 +76,6 @@ pub async fn start_test_server_with(match_store: Arc<dyn MatchStore>, tick_rate:
     let catalog = describe_environments(&worker_command)
         .await
         .expect("le worker n'a pas pu décrire les environnements");
-    let config = MatchRunnerConfig {
-        tick_rate_override: Some(tick_rate),
-        ..MatchRunnerConfig::default()
-    };
     let state = server::new_app_state(
         Arc::new(InMemoryAuthProvider::new(tokens)),
         match_store,
@@ -104,6 +111,8 @@ pub struct Behaviour {
     /// Reçoit l'identifiant du match dès `MatchStart`, pour agir PENDANT le
     /// match (ex. se connecter en spectateur).
     pub match_id_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    /// Temps de calcul déclaré avec chaque action.
+    pub compute_ms: f64,
 }
 
 impl Default for Behaviour {
@@ -112,6 +121,7 @@ impl Default for Behaviour {
             action: zero_action,
             disconnect_after: None,
             match_id_tx: None,
+            compute_ms: 1.0,
         }
     }
 }
@@ -126,6 +136,7 @@ pub struct MatchReport {
     /// Sort des actions envoyées, tel que rapporté par le serveur.
     pub applied: u32,
     pub rejected: u32,
+    pub too_slow: u32,
     pub missing: u32,
 }
 
@@ -160,7 +171,7 @@ pub async fn play_match(url: String, token: &str, environment: &str, mut behavio
 
     let mut start = None;
     let mut action_space = Value::Nil;
-    let (mut observations, mut applied, mut rejected, mut missing) = (0, 0, 0, 0);
+    let (mut observations, mut applied, mut rejected, mut too_slow, mut missing) = (0, 0, 0, 0, 0);
     loop {
         let Some(Ok(WsMessage::Binary(bytes))) = ws.next().await else {
             panic!("connexion fermée avant la fin du match");
@@ -184,6 +195,7 @@ pub async fn play_match(url: String, token: &str, environment: &str, mut behavio
                 match observation.last_action {
                     protocol::ActionStatus::Applied => applied += 1,
                     protocol::ActionStatus::Rejected => rejected += 1,
+                    protocol::ActionStatus::TooSlow => too_slow += 1,
                     protocol::ActionStatus::Missing => missing += 1,
                     protocol::ActionStatus::NotExpected => {}
                 }
@@ -195,6 +207,7 @@ pub async fn play_match(url: String, token: &str, environment: &str, mut behavio
                     let action = protocol::ClientMessage::Action(protocol::ActionMessage {
                         tick: observation.tick,
                         action: (behaviour.action)(&action_space),
+                        compute_ms: behaviour.compute_ms,
                     });
                     ws.send(WsMessage::Binary(protocol::encode(&action).unwrap())).await.unwrap();
                 }
@@ -206,6 +219,7 @@ pub async fn play_match(url: String, token: &str, environment: &str, mut behavio
                     observations,
                     applied,
                     rejected,
+                    too_slow,
                     missing,
                 });
             }

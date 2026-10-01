@@ -72,6 +72,9 @@ class KitchenEnv(ParallelEnv):
         "ranking": "mean_return",
         "render_modes": ["scene"],
         "render_fps": 5,
+        # Temps de calcul accordé à un agent pour chaque action, en
+        # compétition (le réseau n'est pas compté : matchs en pas-à-pas).
+        "compute_budget_ms": 200,
         "is_parallelizable": True,
     }
 

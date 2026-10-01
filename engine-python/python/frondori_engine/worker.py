@@ -7,7 +7,8 @@ le serveur n'a pas à savoir en quel langage l'environnement est écrit.
 
 Chaque message est un objet MessagePack précédé de sa taille (4 octets,
 big-endian), dans les deux sens. Requêtes, selon `cmd` :
-- `describe` : catalogue des environnements (agents, cadence, spaces) ;
+- `describe` : catalogue des environnements (agents, cadence, budget de
+  calcul, classement, spaces) ;
 - `start` (`env_id`, `seed`) : crée l'environnement et renvoie les
   observations initiales ;
 - `step` (`actions` : agent -> action, ou `nil` si l'agent n'a pas répondu à
@@ -121,10 +122,14 @@ def _describe(env_id: str) -> dict:
         raise ValueError(f"{env_id} : metadata['ranking'] doit valoir l'un de {RANKINGS}")
     if ranking == "elo" and len(env.possible_agents) != 2:
         raise ValueError(f"{env_id} : un classement ELO n'a de sens qu'en duel (2 agents)")
+    budget = env.metadata.get("compute_budget_ms")
+    if not budget or budget <= 0:
+        raise ValueError(f"{env_id} : metadata['compute_budget_ms'] (temps de calcul par action, en ms) est requis")
     return {
         "agents": list(env.possible_agents),
         "tick_rate": float(tick_rate),
         "ranking": ranking,
+        "compute_budget_ms": float(budget),
         "title": env.metadata.get("title", env_id),
         "description": env.metadata.get("description", ""),
         "observation_spaces": {agent: wire.space_to_spec(env.observation_space(agent)) for agent in env.possible_agents},

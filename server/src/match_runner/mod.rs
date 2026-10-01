@@ -5,8 +5,17 @@
 //!
 //! Ne contient aucune règle de jeu : l'environnement tourne dans un worker
 //! séparé (cf. `crate::environments`), ce module ne fait que relayer
-//! observations et actions entre les participants et ce worker, au rythme
-//! de l'environnement.
+//! observations et actions entre les participants et ce worker.
+//!
+//! **Pas-à-pas** : à chaque pas, le serveur attend l'action de CHAQUE agent
+//! avant d'avancer (comme `env.step(actions)` en local), si bien que la
+//! latence réseau d'un participant ne lui coûte rien — elle ne fait que
+//! rallonger le match. Ce qui est limité, c'est le temps de calcul que
+//! l'agent déclare avec chaque action (budget fixé par l'environnement,
+//! cf. `timing`). La cadence de l'environnement reste un plancher : un match
+//! ne va jamais plus vite que son rythme nominal (diffusion en direct).
+
+pub mod timing;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,7 +25,9 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::future::join_all;
 use protocol::{ActionStatus, ServerMessage, Value};
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 
+use self::timing::SeatTiming;
 use crate::environments::{EnvInfo, EnvWorker, WorkerCommand};
 use crate::gateway::state::PendingPlayer;
 use crate::matches::{MatchStatus, MatchStore, Participant, ParticipantResult};
@@ -51,23 +62,28 @@ pub struct MatchRunnerConfig {
     /// se joue au rythme de son environnement. Sert aux tests et aux outils
     /// de dev, pour jouer un match complet en quelques secondes.
     pub tick_rate_override: Option<f64>,
-    /// Délai minimal laissé à un agent pour répondre à chaque tick, même si
-    /// la cadence est plus rapide : sur un vrai réseau, un aller-retour prend
-    /// quelques dizaines de ms. Au-delà, l'agent reçoit l'action neutre de
-    /// l'environnement pour ce tick (jamais sa dernière action répétée : un
-    /// tir répété en boucle serait indiscernable d'un abus de lag, alors
-    /// que l'action neutre signale sans ambiguïté "pas de réponse").
-    pub min_action_timeout: Duration,
+    /// Délai RÉSEAU au-delà duquel une action n'est plus attendue : il ne
+    /// sert qu'à ne pas bloquer le match sur un client planté. Large, pour
+    /// qu'aucun réseau lent ne coûte d'action (le temps de calcul, lui, est
+    /// limité à part, par le budget de l'environnement). Au-delà, l'agent
+    /// reçoit l'action neutre pour ce pas (jamais sa dernière action
+    /// répétée : l'action neutre signale sans ambiguïté "pas de réponse").
+    pub response_timeout: Duration,
 }
 
 impl Default for MatchRunnerConfig {
     fn default() -> Self {
         Self {
             tick_rate_override: None,
-            min_action_timeout: Duration::from_millis(50),
+            response_timeout: Duration::from_secs(2),
         }
     }
 }
+
+/// Toutes les combien de pas mesurer l'aller-retour réseau (cf. `probe_rtt`).
+const RTT_PROBE_EVERY: u32 = 100;
+/// Délai d'attente d'un `Pong` pendant une mesure d'aller-retour.
+const RTT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Un participant, du point de vue de la boucle de match.
 struct Seat {
@@ -88,6 +104,7 @@ struct Seat {
     last_action: ActionStatus,
     total_return: f64,
     last_info: Value,
+    timing: SeatTiming,
 }
 
 /// Boucle principale d'un match. `players` : les participants appariés,
@@ -126,6 +143,7 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
             last_action: ActionStatus::NotExpected,
             total_return: 0.0,
             last_info: start.infos.get(agent).cloned().unwrap_or(Value::Nil),
+            timing: SeatTiming::default(),
         })
         .collect();
 
@@ -159,6 +177,7 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
                 agents: start.agents.clone(),
                 observation_space: space_of(&context.env.observation_spaces, &seat.agent),
                 action_space: space_of(&context.env.action_spaces, &seat.agent),
+                compute_budget_ms: context.env.compute_budget_ms,
             }))
         })
         .collect();
@@ -171,15 +190,19 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
             Some(observation_message(0, observation, seat.last_action, 0.0, false, false, seat.last_info.clone()))
         })
         .collect();
+    // Instant d'envoi des dernières observations : point de départ des
+    // temps de réponse mesurés par le serveur.
+    let mut observations_sent_at = Instant::now();
     send_all(&mut seats, initial).await;
 
-    // `tokio::time::interval` : un "top" au rythme voulu. `MissedTickBehavior::Delay`
-    // (plutôt que le `Burst` par défaut) : si un tick a pris du retard (agent
-    // lent, réseau...), on ne rattrape PAS en enchaînant plusieurs ticks
-    // d'affilée — on repart sur un rythme normal.
+    // `tokio::time::interval` : un "top" au rythme nominal, qui n'est qu'un
+    // PLANCHER (un pas ne dure jamais moins), puisqu'on attend de toute façon
+    // les actions de tous les agents. `MissedTickBehavior::Delay` (plutôt que
+    // le `Burst` par défaut) : après un pas lent (réseau lointain), on ne
+    // rattrape PAS en enchaînant plusieurs pas d'affilée.
     let tick_rate = config.tick_rate_override.unwrap_or(context.env.tick_rate);
     let tick_period = Duration::from_secs_f64(1.0 / tick_rate);
-    let action_timeout = tick_period.max(config.min_action_timeout);
+    let budget_ms = context.env.compute_budget_ms;
     let mut ticker = tokio::time::interval(tick_period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ticker.tick().await; // le premier "top" est immédiat
@@ -193,7 +216,6 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
             break MatchStatus::Finished;
         }
 
-        ticker.tick().await;
         tick += 1;
 
         // Réception en parallèle : chaque agent a le même délai pour
@@ -201,25 +223,43 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
         // donne un emprunt mutable DISTINCT par participant, ce qui permet
         // d'attendre tous leurs sockets en même temps.
         // On attend la réponse à la DERNIÈRE observation envoyée, celle du
-        // tick précédent (l'observation initiale porte le tick 0).
+        // tick précédent (l'observation initiale porte le tick 0), de la part
+        // de chaque agent — et, en même temps, le top du rythme nominal :
+        // le pas avance quand les deux sont là (`tokio::join!`).
         let expected_tick = tick - 1;
-        let deadline = tokio::time::Instant::now() + action_timeout;
-        let received = join_all(seats.iter_mut().map(|seat| async move {
-            if !seat.playing {
-                return Received::NotExpected;
-            }
-            recv_action(&mut seat.socket, expected_tick, deadline).await
-        }))
-        .await;
+        let deadline = observations_sent_at + config.response_timeout;
+        let (received, _) = tokio::join!(
+            join_all(seats.iter_mut().map(|seat| async move {
+                if !seat.playing {
+                    return Received::NotExpected;
+                }
+                recv_action(&mut seat.socket, expected_tick, deadline).await
+            })),
+            ticker.tick(),
+        );
 
         let mut actions: HashMap<String, Option<Value>> = HashMap::new();
         for (seat, received) in seats.iter_mut().zip(received) {
             match received {
-                Received::Action(action) => {
-                    seat.last_action = ActionStatus::Applied;
-                    actions.insert(seat.agent.clone(), Some(action));
+                Received::Action { action, compute_ms, received_at } => {
+                    let response_ms = (received_at - observations_sent_at).as_secs_f64() * 1000.0;
+                    // Une déclaration absurde (négative, NaN...) ne vaut pas
+                    // mieux qu'une action invalide.
+                    let (status, applied) = if !compute_ms.is_finite() || compute_ms < 0.0 {
+                        seat.timing.record_action(None, response_ms, false);
+                        (ActionStatus::Rejected, None)
+                    } else if compute_ms > budget_ms {
+                        seat.timing.record_action(Some(compute_ms), response_ms, true);
+                        (ActionStatus::TooSlow, None)
+                    } else {
+                        seat.timing.record_action(Some(compute_ms), response_ms, false);
+                        (ActionStatus::Applied, Some(action))
+                    };
+                    seat.last_action = status;
+                    actions.insert(seat.agent.clone(), applied);
                 }
                 Received::Nothing => {
+                    seat.timing.record_missing();
                     seat.last_action = ActionStatus::Missing;
                     actions.insert(seat.agent.clone(), None);
                 }
@@ -232,6 +272,12 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
         }
         if seats.iter().any(|seat| seat.forfeited) {
             continue; // le haut de la boucle arrête le match
+        }
+        // Tous viennent de répondre et attendent la prochaine observation :
+        // le bon moment pour mesurer leur aller-retour réseau sans que leur
+        // temps de calcul s'y mêle.
+        if tick == 1 || tick.is_multiple_of(RTT_PROBE_EVERY) {
+            probe_rtt(&mut seats).await;
         }
 
         let step = match worker.step(&actions).await {
@@ -273,6 +319,7 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
                 ))
             })
             .collect();
+        observations_sent_at = Instant::now();
         send_all(&mut seats, messages).await;
     };
 
@@ -291,8 +338,23 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
             final_return: s.total_return,
             forfeited: s.forfeited,
             final_info: serde_json::to_value(&s.last_info).unwrap_or(serde_json::Value::Null),
+            timing: serde_json::to_value(s.timing.summary(budget_ms)).unwrap_or(serde_json::Value::Null),
+            step_timings: s.timing.steps(),
         })
         .collect();
+    for s in &seats {
+        let summary = s.timing.summary(budget_ms);
+        if summary.suspect {
+            tracing::warn!(
+                %match_id,
+                player_id = %s.player_id,
+                unexplained_ms = ?summary.median_unexplained_ms,
+                rtt_ms = ?summary.rtt_ms,
+                mean_compute_ms = ?summary.mean_compute_ms,
+                "temps de calcul déclarés incohérents avec les temps de réponse mesurés"
+            );
+        }
+    }
     tracing::info!(%match_id, environment = %context.environment, ticks = tick, status = status.as_str(), ?returns, ?forfeited, "match terminé");
 
     let end = ServerMessage::MatchEnd(protocol::MatchEnd { returns, forfeited });
@@ -357,10 +419,16 @@ fn observation_message(
 
 /// Ce qu'on a obtenu d'un participant pour un tick.
 enum Received {
-    Action(Value),
-    /// Rien reçu à temps, ou un message qui n'est pas une action : l'action
-    /// neutre sera appliquée pour ce tick, sans couper la connexion (un SDK
-    /// buggé peut se rattraper au tick suivant).
+    /// Une action pour le bon tick, son temps de calcul déclaré, et l'instant
+    /// de sa réception (pour mesurer le temps de réponse).
+    Action {
+        action: Value,
+        compute_ms: f64,
+        received_at: Instant,
+    },
+    /// Aucune action pour ce tick avant le délai réseau : l'action neutre
+    /// sera appliquée, sans couper la connexion (un SDK buggé ou ralenti
+    /// peut se rattraper au tick suivant).
     Nothing,
     /// Socket fermé ou en erreur : forfait.
     Disconnected,
@@ -368,7 +436,7 @@ enum Received {
     NotExpected,
 }
 
-async fn recv_action(socket: &mut WebSocket, expected_tick: u32, deadline: tokio::time::Instant) -> Received {
+async fn recv_action(socket: &mut WebSocket, expected_tick: u32, deadline: Instant) -> Received {
     // Une boucle, et non un seul `recv` : le socket peut contenir d'autres
     // messages avant la bonne action, qu'il ne faut surtout pas prendre pour
     // elle. Bug réel corrigé : une action arrivée APRÈS le délai de son tick
@@ -391,10 +459,41 @@ async fn recv_action(socket: &mut WebSocket, expected_tick: u32, deadline: tokio
         let Message::Binary(bytes) = message else { continue };
         if let Ok(protocol::ClientMessage::Action(action)) = protocol::decode::<protocol::ClientMessage>(&bytes) {
             if action.tick == expected_tick {
-                return Received::Action(action.action);
+                return Received::Action {
+                    action: action.action,
+                    compute_ms: action.compute_ms,
+                    received_at: Instant::now(),
+                };
             }
         }
     }
+}
+
+/// Mesure l'aller-retour réseau de chaque participant encore en jeu, par un
+/// `Ping` dont on attend le `Pong` (en parallèle pour tous). Appelée quand
+/// tous viennent de répondre et attendent la prochaine observation : leur
+/// client n'a alors rien à calculer et répond tout de suite. Un `Pong` qui
+/// n'arrive pas à temps n'est pas une faute, seulement une mesure en moins.
+async fn probe_rtt(seats: &mut [Seat]) {
+    join_all(seats.iter_mut().filter(|seat| seat.playing && seat.connected).map(|seat| async move {
+        let nonce: u64 = rand::random();
+        let Ok(ping) = protocol::encode(&ServerMessage::Ping(protocol::Ping { nonce })) else { return };
+        let sent_at = Instant::now();
+        if seat.socket.send(Message::Binary(ping)).await.is_err() {
+            return; // la déconnexion sera constatée au prochain envoi/réception
+        }
+        let deadline = sent_at + RTT_PROBE_TIMEOUT;
+        while let Ok(Some(Ok(message))) = tokio::time::timeout_at(deadline, seat.socket.recv()).await {
+            let Message::Binary(bytes) = message else { continue };
+            if let Ok(protocol::ClientMessage::Pong(pong)) = protocol::decode::<protocol::ClientMessage>(&bytes) {
+                if pong.nonce == nonce {
+                    seat.timing.record_rtt(sent_at.elapsed().as_secs_f64() * 1000.0);
+                    return;
+                }
+            }
+        }
+    }))
+    .await;
 }
 
 // ---------------------------------------------------------------------

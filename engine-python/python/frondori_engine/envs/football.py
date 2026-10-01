@@ -48,6 +48,10 @@ class FootballEnv(ParallelEnv):
         "description": "Two teams face off on a 2D pitch: each agent controls a whole team.",
         # Duel : classement ELO, le vainqueur étant l'équipe au meilleur retour.
         "ranking": "elo",
+        # Temps de calcul accordé à un agent pour chaque action, en
+        # compétition (le réseau n'est pas compté : matchs en pas-à-pas).
+        # Environ un pas de simulation (30 pas/s).
+        "compute_budget_ms": 30,
         "render_modes": ["scene"],
         "is_parallelizable": True,
     }

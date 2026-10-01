@@ -44,6 +44,13 @@ def test_declares_a_tick_rate(env_id):
 
 
 @pytest.mark.parametrize("env_id", ENV_IDS)
+def test_declares_a_compute_budget(env_id):
+    # Temps de calcul accordé à un agent pour chaque action en compétition
+    # (cf. `worker._describe`) : le serveur l'applique, le SDK l'annonce.
+    assert frondori_engine.make(env_id).metadata["compute_budget_ms"] > 0
+
+
+@pytest.mark.parametrize("env_id", ENV_IDS)
 def test_declares_how_agents_are_ranked(env_id):
     # Le site classe les agents selon ce type, sans rien connaître du jeu.
     env = frondori_engine.make(env_id)

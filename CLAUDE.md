@@ -42,7 +42,10 @@ Tout environnement :
   Changer des règles = publier `nom-v(N+1)`, jamais modifier `nom-vN`
   (reproductibilité des résultats, replays et classements) ;
 - déclare sa cadence en compétition dans `metadata["render_fps"]` (pas par
-  seconde : 30 pour le football, 5 pour la cuisine) ;
+  seconde : 30 pour le football, 5 pour la cuisine) — un PLANCHER de durée
+  par pas, les matchs se jouant en pas-à-pas (cf. `match_runner`) ;
+- déclare son budget de calcul par action, `metadata["compute_budget_ms"]`
+  (30 ms au football, 200 ms en cuisine) ;
 - déclare `metadata["title"]`, `metadata["description"]` (affichés par le
   site) et `metadata["ranking"]` : `"elo"` (duel à 2 agents uniquement — le
   vainqueur est l'agent au meilleur retour) ou `"mean_return"` (retour moyen
@@ -104,7 +107,9 @@ Décisions à connaître avant de toucher à `engine/src/sim.rs` :
 
 ## `protocol` — messages réseau
 
-`Hello/Welcome/AuthError/MatchStart/ActionMessage/ObservationMessage/MatchEnd/Ping/Pong`.
+`Hello/Welcome/AuthError/MatchStart/ActionMessage/ObservationMessage/MatchEnd/Ping/Pong`
+(version 0.3 : `MatchStart.compute_budget_ms`, `ActionMessage.compute_ms`,
+statut `TooSlow`).
 Observations, actions, spaces et infos sont des `rmpv::Value` opaques : leur
 forme dépend de l'environnement, qui les décrit (spaces envoyés dans
 `MatchStart`) et les valide. Chaque `ObservationMessage` porte la récompense
@@ -140,10 +145,30 @@ par couple (agent, environnement), côté site. Une file par environnement,
 jusqu'à avoir autant de participants que l'environnement a d'agents. Files protégées par `std::sync::Mutex` (aucun `.await` verrou
 tenu) ; ping de chaque joueur en attente avant de lancer un match.
 
-**`match_runner`** (`src/match_runner/`) : boucle à la cadence de
-l'environnement (`MatchRunnerConfig.tick_rate_override` pour les tests et
-outils de dev), délai d'action = max(période du tick, 50 ms). Action absente
-ou invalide -> action neutre (côté worker). **Une action est rattachée à son
+**`match_runner`** (`src/match_runner/`) : **pas-à-pas**. À chaque pas, le
+serveur attend l'action de CHAQUE agent avant d'avancer (comme
+`env.step(actions)` en local) : la latence réseau d'un participant ne lui
+coûte rien, elle rallonge seulement le match. Ce qui est limité, c'est le
+TEMPS DE CALCUL, mesuré par le client (de la réception de l'observation à
+l'envoi de l'action) et déclaré avec chaque action (`compute_ms`) ; au-delà
+du budget de l'environnement -> `TooSlow` + action neutre. La cadence de
+l'environnement n'est qu'un plancher (`tokio::join!` des actions et du
+ticker) ; `MatchRunnerConfig.response_timeout` (2 s) ne sert qu'à ne pas
+bloquer sur un client planté (-> `Missing`). Action invalide -> action
+neutre (côté worker).
+- `timing.rs` : un temps déclaré n'est pas vérifiable (le client tourne chez
+  le participant). Le serveur le confronte au temps de réponse qu'il mesure
+  et à l'aller-retour réseau (`Ping` envoyés pendant le match, juste après
+  que tous ont répondu) : un temps inexpliqué médian > 50 ms = `suspect`
+  (loggé, affiché sur le site, mais le match compte). Dissuasion, pas
+  preuve : un client modifié peut aussi retarder ses `Pong`. Bilan
+  (`timing`) et détail pas par pas (`step_timings`) enregistrés par
+  participant : ce sont aussi des données de recherche.
+- **Piège trouvé** : en passant au pas-à-pas, un reste de l'ancienne boucle
+  attendait le rythme une seconde fois avant d'écouter les actions — matchs
+  deux fois trop longs et clients honnêtes déclarés suspects. Invisible à
+  1000 pas/s : vu en réseau réel à 5 pas/s (cf. `lockstep_test.rs`, test de
+  cadence). Valider le pas-à-pas à la VRAIE cadence. **Une action est rattachée à son
 `tick`** : seule celle qui répond à la dernière observation est acceptée,
 une action en retard est jetée. Bug réel corrigé : le serveur prenait le
 prochain message du socket sans regarder son tick, et après un seul retard

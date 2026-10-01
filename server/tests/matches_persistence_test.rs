@@ -14,6 +14,10 @@ use server::matches::{MatchStore, PostgresMatchStore};
 
 use common::{play_match, Behaviour, Outcome};
 
+/// Une ligne de `match_participants` : siège, agent, joueur, retour, forfait,
+/// puis `final_info`, `timing` et `step_timings` en texte JSON.
+type ParticipantRow = (i32, String, String, Option<f64>, bool, String, String, String);
+
 #[tokio::test]
 async fn finished_match_is_persisted_with_participants_and_replay() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
@@ -64,8 +68,8 @@ async fn finished_match_is_persisted_with_participants_and_replay() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    let mut participants: Vec<(i32, String, String, Option<f64>, bool, String)> = sqlx::query_as(
-        "SELECT seat, agent, player_id, final_return, forfeited, final_info::text
+    let mut participants: Vec<ParticipantRow> = sqlx::query_as(
+        "SELECT seat, agent, player_id, final_return, forfeited, final_info::text, timing::text, step_timings::text
          FROM match_participants WHERE match_id = $1::uuid ORDER BY seat",
     )
     .bind(&match_id)
@@ -94,7 +98,19 @@ async fn finished_match_is_persisted_with_participants_and_replay() {
     let mut players: Vec<&str> = participants.iter().map(|p| p.2.as_str()).collect();
     players.sort();
     assert_eq!(players, ["agent-a", "agent-b"]);
-    for (_, _, _, final_return, forfeited, final_info) in &participants {
+    for (_, _, _, final_return, forfeited, final_info, timing, step_timings) in &participants {
+        // Temps de calcul déclarés (1 ms par le client de test), budget de
+        // l'environnement, aller-retour réseau mesuré par `Ping`, et le
+        // détail pas par pas.
+        let timing: serde_json::Value = serde_json::from_str(timing).unwrap();
+        assert_eq!(timing["compute_budget_ms"], 200.0);
+        assert_eq!(timing["mean_compute_ms"], 1.0);
+        assert_eq!((timing["too_slow"].as_u64(), timing["missing"].as_u64()), (Some(0), Some(0)));
+        assert!(timing["rtt_ms"].as_f64().is_some(), "aucun aller-retour mesuré : {timing}");
+        assert_eq!(timing["suspect"], false);
+        let steps: serde_json::Value = serde_json::from_str(step_timings).unwrap();
+        assert_eq!(steps["compute_ms"].as_array().map(Vec::len), Some(200));
+        assert_eq!(steps["response_ms"].as_array().map(Vec::len), Some(200));
         assert_eq!(*final_return, Some(0.0));
         assert!(!forfeited);
         // Infos propres à l'environnement, gardées telles quelles.

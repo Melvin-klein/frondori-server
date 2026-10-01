@@ -30,6 +30,9 @@ pub struct EnvInfo {
     /// `"mean_return"` (retour moyen par match). Le serveur ne s'en sert
     /// pas lui-même : il le publie dans la table `environments`.
     pub ranking: String,
+    /// Temps de calcul accordé à un agent pour chaque action, en ms (les
+    /// matchs se jouent en pas-à-pas : le réseau n'est pas compté).
+    pub compute_budget_ms: f64,
     /// Nom et description lisibles, affichés par le site.
     pub title: String,
     pub description: String,

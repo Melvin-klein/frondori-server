@@ -37,6 +37,12 @@ pub struct ParticipantResult {
     /// Dernières informations annexes renvoyées par l'environnement pour cet
     /// agent (ex. score, statistiques) — propres à chaque environnement.
     pub final_info: serde_json::Value,
+    /// Bilan de ses temps de réponse : calcul déclaré, aller-retour réseau,
+    /// incohérences (cf. `match_runner::timing::TimingSummary`).
+    pub timing: serde_json::Value,
+    /// Ses temps pas par pas (calcul déclaré, réponse mesurée), pour la
+    /// recherche (cf. `match_runner::timing::SeatTiming::steps`).
+    pub step_timings: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

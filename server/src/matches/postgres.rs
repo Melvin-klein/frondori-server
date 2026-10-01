@@ -23,7 +23,11 @@ use crate::match_runner::MatchId;
 /// `record_environments`). Un environnement retiré du code n'est pas
 /// supprimé (ses matchs passés y font référence) : il passe `available =
 /// false`.
-const SCHEMA: [&str; 4] = [
+///
+/// Colonnes ajoutées après coup : par `ALTER TABLE ... ADD COLUMN IF NOT
+/// EXISTS`, sans danger lui aussi à ré-exécuter, et qui n'efface rien d'une
+/// base existante.
+const SCHEMA: [&str; 7] = [
     "CREATE TABLE IF NOT EXISTS environments (
         id                 TEXT PRIMARY KEY,
         title              TEXT NOT NULL,
@@ -55,6 +59,12 @@ const SCHEMA: [&str; 4] = [
         PRIMARY KEY (match_id, seat)
     )",
     "CREATE INDEX IF NOT EXISTS match_participants_player_id_idx ON match_participants (player_id)",
+    // Temps de calcul accordé par action (matchs en pas-à-pas).
+    "ALTER TABLE environments ADD COLUMN IF NOT EXISTS compute_budget_ms DOUBLE PRECISION",
+    // Bilan des temps de réponse de chaque participant, et le détail pas par
+    // pas (cf. `match_runner::timing`).
+    "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS timing JSONB",
+    "ALTER TABLE match_participants ADD COLUMN IF NOT EXISTS step_timings JSONB",
 ];
 
 /// Clé arbitraire (mais fixe) du verrou qui sérialise la création du schéma.
@@ -133,15 +143,16 @@ impl PostgresMatchStore {
         for (id, info) in catalog {
             sqlx::query(
                 "INSERT INTO environments
-                     (id, title, description, ranking, agents, tick_rate,
+                     (id, title, description, ranking, agents, tick_rate, compute_budget_ms,
                       observation_spaces, action_spaces, available, updated_at)
-                 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, true, now())
+                 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb, true, now())
                  ON CONFLICT (id) DO UPDATE SET
                      title = EXCLUDED.title,
                      description = EXCLUDED.description,
                      ranking = EXCLUDED.ranking,
                      agents = EXCLUDED.agents,
                      tick_rate = EXCLUDED.tick_rate,
+                     compute_budget_ms = EXCLUDED.compute_budget_ms,
                      observation_spaces = EXCLUDED.observation_spaces,
                      action_spaces = EXCLUDED.action_spaces,
                      available = true,
@@ -153,6 +164,7 @@ impl PostgresMatchStore {
             .bind(&info.ranking)
             .bind(json(&info.agents))
             .bind(info.tick_rate)
+            .bind(info.compute_budget_ms)
             .bind(json(&spaces_for_json(&info.observation_spaces)))
             .bind(json(&spaces_for_json(&info.action_spaces)))
             .execute(&mut *tx)
@@ -193,7 +205,8 @@ impl PostgresMatchStore {
         for result in results {
             sqlx::query(
                 "UPDATE match_participants
-                 SET final_return = $3, forfeited = $4, final_info = $5::jsonb
+                 SET final_return = $3, forfeited = $4, final_info = $5::jsonb,
+                     timing = $6::jsonb, step_timings = $7::jsonb
                  WHERE match_id = $1::uuid AND seat = $2",
             )
             .bind(match_id.to_string())
@@ -201,6 +214,8 @@ impl PostgresMatchStore {
             .bind(result.final_return)
             .bind(result.forfeited)
             .bind(result.final_info.to_string())
+            .bind(result.timing.to_string())
+            .bind(result.step_timings.to_string())
             .execute(&mut *tx)
             .await?;
         }

@@ -143,7 +143,13 @@ tenu) ; ping de chaque joueur en attente avant de lancer un match.
 **`match_runner`** (`src/match_runner/`) : boucle à la cadence de
 l'environnement (`MatchRunnerConfig.tick_rate_override` pour les tests et
 outils de dev), délai d'action = max(période du tick, 50 ms). Action absente
-ou invalide -> action neutre (côté worker). Déconnexion d'un agent encore en
+ou invalide -> action neutre (côté worker). **Une action est rattachée à son
+`tick`** : seule celle qui répond à la dernière observation est acceptée,
+une action en retard est jetée. Bug réel corrigé : le serveur prenait le
+prochain message du socket sans regarder son tick, et après un seul retard
+l'agent jouait avec un pas de décalage jusqu'à la fin du match (trouvé avec
+une politique de cuisine scriptée : 13 soupes en local, 7 en réseau ; cf.
+`tests/late_action_test.rs`). Déconnexion d'un agent encore en
 jeu -> fin immédiate, forfait, pas de reconnexion. Panne de l'environnement
 -> statut `aborted` (le résultat ne doit pas compter). **Piège connu** : le
 serveur ferme la connexion juste après `MatchEnd` — un client doit tolérer

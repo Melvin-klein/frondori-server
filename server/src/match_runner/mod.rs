@@ -200,11 +200,15 @@ pub async fn run_match(players: Vec<PendingPlayer>, config: MatchRunnerConfig, s
         // répondre, quel que soit le nombre de participants. `iter_mut`
         // donne un emprunt mutable DISTINCT par participant, ce qui permet
         // d'attendre tous leurs sockets en même temps.
+        // On attend la réponse à la DERNIÈRE observation envoyée, celle du
+        // tick précédent (l'observation initiale porte le tick 0).
+        let expected_tick = tick - 1;
+        let deadline = tokio::time::Instant::now() + action_timeout;
         let received = join_all(seats.iter_mut().map(|seat| async move {
             if !seat.playing {
                 return Received::NotExpected;
             }
-            recv_action(&mut seat.socket, action_timeout).await
+            recv_action(&mut seat.socket, expected_tick, deadline).await
         }))
         .await;
 
@@ -364,17 +368,32 @@ enum Received {
     NotExpected,
 }
 
-async fn recv_action(socket: &mut WebSocket, timeout: Duration) -> Received {
-    match tokio::time::timeout(timeout, socket.recv()).await {
-        Err(_elapsed) => Received::Nothing,
-        Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => Received::Disconnected,
-        Ok(Some(Ok(Message::Binary(bytes)))) => match protocol::decode::<protocol::ClientMessage>(&bytes) {
-            Ok(protocol::ClientMessage::Action(message)) => Received::Action(message.action),
-            _ => Received::Nothing,
-        },
+async fn recv_action(socket: &mut WebSocket, expected_tick: u32, deadline: tokio::time::Instant) -> Received {
+    // Une boucle, et non un seul `recv` : le socket peut contenir d'autres
+    // messages avant la bonne action, qu'il ne faut surtout pas prendre pour
+    // elle. Bug réel corrigé : une action arrivée APRÈS le délai de son tick
+    // restait dans le socket et était prise, au tick suivant, pour la
+    // réponse courante — l'agent jouait alors avec un pas de retard jusqu'à
+    // la fin du match (cf. `tests/late_action_test.rs`). D'où :
+    // - une action d'un tick passé est périmée : jetée ;
+    // - tout autre message (`Pong` tardif, action d'un tick futur, message
+    //   illisible) est ignoré ;
+    // et on continue d'attendre la bonne action jusqu'à la MÊME échéance
+    // (`timeout_at`, pas un nouveau délai à chaque message).
+    loop {
+        let message = match tokio::time::timeout_at(deadline, socket.recv()).await {
+            Err(_elapsed) => return Received::Nothing,
+            Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => return Received::Disconnected,
+            Ok(Some(Ok(message))) => message,
+        };
         // Texte, ping/pong WebSocket bas niveau : notre protocole n'en envoie
         // jamais côté client, on l'ignore.
-        Ok(Some(Ok(_))) => Received::Nothing,
+        let Message::Binary(bytes) = message else { continue };
+        if let Ok(protocol::ClientMessage::Action(action)) = protocol::decode::<protocol::ClientMessage>(&bytes) {
+            if action.tick == expected_tick {
+                return Received::Action(action.action);
+            }
+        }
     }
 }
 

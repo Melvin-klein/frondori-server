@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 pub use postgres::PostgresMatchStore;
 
+use crate::environments::Catalog;
 use crate::match_runner::MatchId;
 
 /// Un participant au match : quel joueur contrôle quel agent de
@@ -66,6 +67,11 @@ impl MatchStatus {
 /// (cf. implémentations), jamais remontée au match.
 #[async_trait]
 pub trait MatchStore: Send + Sync {
+    /// Publie le catalogue des environnements au démarrage du serveur : le
+    /// site en tire la liste des jeux, leurs spaces et leur type de
+    /// classement, sans jamais dupliquer ces informations de son côté.
+    async fn record_environments(&self, catalog: &Catalog);
+
     /// Enregistre le DÉBUT d'un match (statut "live"), avant le premier tick.
     async fn record_start(&self, match_id: MatchId, environment: &str, participants: &[Participant]);
 
@@ -86,6 +92,8 @@ pub struct NullMatchStore;
 
 #[async_trait]
 impl MatchStore for NullMatchStore {
+    async fn record_environments(&self, _catalog: &Catalog) {}
+
     async fn record_start(&self, _match_id: MatchId, _environment: &str, _participants: &[Participant]) {}
 
     async fn record_end(

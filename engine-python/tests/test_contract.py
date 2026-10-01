@@ -44,6 +44,16 @@ def test_declares_a_tick_rate(env_id):
 
 
 @pytest.mark.parametrize("env_id", ENV_IDS)
+def test_declares_how_agents_are_ranked(env_id):
+    # Le site classe les agents selon ce type, sans rien connaître du jeu.
+    env = frondori_engine.make(env_id)
+    assert env.metadata["ranking"] in ("elo", "mean_return")
+    if env.metadata["ranking"] == "elo":
+        assert len(env.possible_agents) == 2
+    assert env.metadata["title"]
+
+
+@pytest.mark.parametrize("env_id", ENV_IDS)
 def test_scene_render_is_json_serializable(env_id):
     env = frondori_engine.make(env_id, render_mode="scene")
     env.reset(seed=0)

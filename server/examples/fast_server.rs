@@ -57,6 +57,7 @@ async fn main() {
         tick_rate_override: Some(tick_rate),
         ..MatchRunnerConfig::default()
     };
+    match_store.record_environments(&catalog).await;
     let state = server::new_app_state(auth, match_store, catalog, worker_command, config);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8081")

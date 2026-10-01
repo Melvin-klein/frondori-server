@@ -43,6 +43,14 @@ Tout environnement :
   (reproductibilité des résultats, replays et classements) ;
 - déclare sa cadence en compétition dans `metadata["render_fps"]` (pas par
   seconde : 30 pour le football, 5 pour la cuisine) ;
+- déclare `metadata["title"]`, `metadata["description"]` (affichés par le
+  site) et `metadata["ranking"]` : `"elo"` (duel à 2 agents uniquement — le
+  vainqueur est l'agent au meilleur retour) ou `"mean_return"` (retour moyen
+  par match). Vérifié par le contrat et par `worker._describe` ;
+- peut renvoyer dans ses infos une clé `score` : convention que le site
+  affiche comme score du match (le football y met ses buts marqués) ; à
+  défaut, le site affiche le retour. Toutes les infos numériques finales
+  apparaissent dans les statistiques de la page de match ;
 - se rend via `render_mode="scene"` : primitives génériques rect/cercle/texte
   en JSON (`scene.py`), qu'un seul afficheur dessine pour tous les jeux ;
 - doit être conçu pour que l'élément « zéro » de son `action_space` soit une
@@ -151,6 +159,16 @@ replay, ...)` et `match_participants (match_id, seat, agent, player_id,
 final_return, forfeited, final_info)` — un match peut avoir N agents. Le
 replay est la liste des scènes JSON (une par pas). Tables créées/possédées
 par Rust (`CREATE TABLE IF NOT EXISTS`), lues par Laravel.
+- `environments` : le catalogue, republié à chaque démarrage du serveur
+  (`record_environments`) ; un environnement disparu du code passe
+  `available = false` (jamais supprimé : ses matchs y font référence). Le
+  site ne code AUCUN environnement en dur, il lit cette table. Les bornes
+  infinies des spaces y sont écrites `"inf"`/`"-inf"` (JSON n'a pas
+  d'infini ; `serde_json` aurait mis `null`, constaté).
+- **Piège** : `CREATE TABLE IF NOT EXISTS` n'est pas sûr en concurrence
+  (deux créations simultanées -> `duplicate key ... pg_type_typname_nsp_index`,
+  constaté avec deux tests en parallèle). `ensure_schema` prend un verrou
+  consultatif (`pg_advisory_xact_lock`) le temps de la création.
 
 Outil de dev : `server/examples/fast_server.rs` — le vrai serveur à cadence
 accélérée (`FRONDORI_TICK_RATE`, défaut 300), port 8081, tokens en mémoire
@@ -187,25 +205,16 @@ python examples/random_agent.py kitchen-v0
 
 ## État du projet / ce qui reste
 
-Chantier multi-environnements :
-- phase 1 (faite) : contrat PettingZoo, registre versionné, rendu en scène,
-  `football-v0` et `kitchen-v0` en local ;
-- phase 2a/2b (faites) : worker, protocole générique, matchmaking par
-  environnement, persistance multi-agents, spectateur en scène, SDK générique.
-  Validé en réseau réel : les deux mêmes agents jouent simultanément un match
-  de cuisine et un match de football (processus SDK séparés), visionneuse
-  locale en direct ;
-- phase 2c (à faire) : `frondori-web` sur le nouveau schéma (lecture de
-  `matches`/`match_participants`, rendu des scènes, classement par couple
-  (agent, environnement) : ELO en duel, score partagé en coopératif ; la
-  colonne `agents.environment` du site devient obsolète).
-
-**En attente d'une action de l'utilisateur** : l'ancienne table `matches`
-(schéma football, vide) doit être supprimée à la main avant que le nouveau
-schéma puisse s'appliquer (`psql -d frondori -c "DROP TABLE matches"`). Une
-colonne `players.environment`, ajoutée puis abandonnée pendant la phase 2,
-existe encore en base sans être utilisée (suppression facultative :
-`ALTER TABLE players DROP COLUMN environment`).
+Chantier multi-environnements (fait, phases 1 à 2c) : contrat PettingZoo,
+registre versionné, rendu en scène, worker, protocole générique,
+matchmaking par environnement, persistance multi-agents, SDK générique, et
+`frondori-web` sur ce schéma — catalogue lu dans `environments`, classement
+par couple (agent, environnement) dans `agent_ratings` (commande
+`matches:update-ratings` : ELO en duel, retour moyen sinon ; un forfait
+annule un match coopératif, un match `aborted` ne compte jamais), rendu
+générique des scènes (`resources/js/lib/scene.js`), archives de match
+(`match.json` avec les spaces + `replay.json`). Validé de bout en bout :
+vrais clients SDK -> `fast_server` + Postgres -> classements -> pages.
 
 Hors scope pour l'instant : règles avancées du football (hors-jeu, fautes),
 reconnexion en cours de match, CI.

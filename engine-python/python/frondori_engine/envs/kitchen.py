@@ -64,7 +64,16 @@ _CHEF_COLORS = ("#3b82f6", "#ef4444")
 class KitchenEnv(ParallelEnv):
     # `render_fps` : cadence d'un match en compétition. 5 pas par seconde,
     # soit 200 ms de réflexion par décision et 40 s pour un épisode complet.
-    metadata = {"name": "kitchen_v0", "render_modes": ["scene"], "render_fps": 5, "is_parallelizable": True}
+    metadata = {
+        "name": "kitchen_v0",
+        "title": "Cuisine coopérative",
+        "description": "Deux chefs partagent une cuisine et doivent servir un maximum de soupes ensemble.",
+        # Coopératif : classement au retour moyen par match, pas d'ELO.
+        "ranking": "mean_return",
+        "render_modes": ["scene"],
+        "render_fps": 5,
+        "is_parallelizable": True,
+    }
 
     def __init__(
         self,

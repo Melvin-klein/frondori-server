@@ -26,6 +26,13 @@ pub struct EnvInfo {
     pub agents: Vec<String>,
     /// Cadence d'un match, en pas par seconde.
     pub tick_rate: f64,
+    /// Comment le site classe les agents : `"elo"` (duel) ou
+    /// `"mean_return"` (retour moyen par match). Le serveur ne s'en sert
+    /// pas lui-même : il le publie dans la table `environments`.
+    pub ranking: String,
+    /// Nom et description lisibles, affichés par le site.
+    pub title: String,
+    pub description: String,
     pub observation_spaces: HashMap<String, Value>,
     pub action_spaces: HashMap<String, Value>,
 }

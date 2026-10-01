@@ -30,6 +30,7 @@ async fn main() {
     tracing::info!(environments = ?available, "environnements disponibles");
 
     let (auth, match_store) = build_persistence().await;
+    match_store.record_environments(&catalog).await;
     let state = server::new_app_state(auth, match_store, catalog, worker_command, MatchRunnerConfig::default());
     let app = server::router(state);
 

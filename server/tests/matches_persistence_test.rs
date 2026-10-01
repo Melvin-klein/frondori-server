@@ -10,7 +10,7 @@ mod common;
 
 use std::sync::Arc;
 
-use server::matches::PostgresMatchStore;
+use server::matches::{MatchStore, PostgresMatchStore};
 
 use common::{play_match, Behaviour, Outcome};
 
@@ -107,4 +107,69 @@ async fn finished_match_is_persisted_with_participants_and_replay() {
     let scenes = scenes.as_array().expect("le replay devrait être un tableau");
     assert_eq!(scenes.len(), 201);
     assert!(scenes[0]["shapes"].is_array());
+}
+
+#[tokio::test]
+async fn the_environment_catalog_is_published_for_the_website() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL non définie : test ignoré (pas de PostgreSQL local disponible)");
+        return;
+    };
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connexion à PostgreSQL échouée");
+    let store = PostgresMatchStore::new(pool.clone())
+        .await
+        .expect("initialisation du schéma des matchs échouée");
+    let catalog = server::environments::describe_environments(&common::worker_command())
+        .await
+        .expect("le worker n'a pas pu décrire les environnements");
+
+    // Un environnement publié autrefois mais retiré du code depuis.
+    sqlx::query(
+        "INSERT INTO environments (id, title, description, ranking, agents, tick_rate, observation_spaces, action_spaces)
+         VALUES ('retired-test-v0', 'Retiré', '', 'elo', '[]', 1, '{}', '{}')
+         ON CONFLICT (id) DO UPDATE SET available = true",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    store.record_environments(&catalog).await;
+
+    // Bornes infinies du football (position du ballon non bornée) : écrites
+    // en chaînes, JSON ne sachant pas représenter l'infini.
+    let ball_low: String = sqlx::query_scalar(
+        "SELECT (observation_spaces->'team_0'->'spaces'->'ball'->'low')::text FROM environments WHERE id = 'football-v0'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let rows: Vec<(String, String, String, bool, String)> = sqlx::query_as(
+        "SELECT id, ranking, title, available, action_spaces::text FROM environments
+         WHERE id IN ('football-v0', 'kitchen-v0', 'retired-test-v0') ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    // Nettoyage avant les assertions (cf. test précédent). Les vrais
+    // environnements restent : ce sont ceux que le serveur publie de toute
+    // façon à chaque démarrage.
+    sqlx::query("DELETE FROM environments WHERE id = 'retired-test-v0'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 3);
+    let (id, ranking, _, available, _) = &rows[0];
+    assert_eq!((id.as_str(), ranking.as_str(), *available), ("football-v0", "elo", true));
+    let (id, ranking, title, available, action_spaces) = &rows[1];
+    assert_eq!((id.as_str(), ranking.as_str(), *available), ("kitchen-v0", "mean_return", true));
+    assert_eq!(title, "Cuisine coopérative");
+    let spaces: serde_json::Value = serde_json::from_str(action_spaces).unwrap();
+    assert_eq!(spaces["chef_0"], serde_json::json!({"type": "discrete", "n": 6, "start": 0}));
+    assert_eq!(ball_low, r#"["-inf", "-inf", "-inf", "-inf"]"#);
+    let (id, _, _, available, _) = &rows[2];
+    assert_eq!((id.as_str(), *available), ("retired-test-v0", false));
 }

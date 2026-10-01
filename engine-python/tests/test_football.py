@@ -23,6 +23,22 @@ def test_a_goal_rewards_the_scorer_and_penalizes_the_other_team():
     assert list(observations["team_1"]["score"]) == [0, 1]
 
 
+def test_infos_report_goals_and_possession():
+    env = frondori_engine.make("football-v0")
+    env.reset(seed=1)
+
+    for _ in range(9000):
+        _, rewards, _, _, infos = env.step({"team_0": ATTACK, "team_1": IDLE})
+        if rewards["team_0"] != 0:
+            break
+
+    assert (infos["team_0"]["score"], infos["team_1"]["score"]) == (1, 0)
+    # La possession se partage entre les deux équipes ; l'équipe qui attaque
+    # (et touche le ballon) l'emporte largement sur celle qui ne bouge pas.
+    assert infos["team_0"]["possession"] + infos["team_1"]["possession"] == pytest.approx(1.0, abs=0.002)
+    assert infos["team_0"]["possession"] > infos["team_1"]["possession"]
+
+
 def test_the_same_policy_scores_from_either_side():
     # Chaque équipe agit dans son propre repère : la politique qui marque en
     # team_0 doit aussi marquer en team_1 (et non contre son camp).

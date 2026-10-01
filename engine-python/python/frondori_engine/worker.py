@@ -32,6 +32,12 @@ import msgpack
 import frondori_engine
 from frondori_engine import wire
 
+# Comment la plateforme classe les agents d'un environnement (déclaré dans
+# `metadata["ranking"]`) : `elo` pour un duel (le vainqueur est l'agent au
+# meilleur retour), `mean_return` pour le reste (coopératif, solo) — le
+# retour moyen de l'agent par match.
+RANKINGS = ("elo", "mean_return")
+
 
 def main() -> None:
     # La sortie standard porte le protocole : un `print` égaré dans le code
@@ -110,9 +116,17 @@ def _describe(env_id: str) -> dict:
     tick_rate = env.metadata.get("render_fps")
     if not tick_rate or tick_rate <= 0:
         raise ValueError(f"{env_id} : metadata['render_fps'] (cadence en pas/seconde) est requis")
+    ranking = env.metadata.get("ranking")
+    if ranking not in RANKINGS:
+        raise ValueError(f"{env_id} : metadata['ranking'] doit valoir l'un de {RANKINGS}")
+    if ranking == "elo" and len(env.possible_agents) != 2:
+        raise ValueError(f"{env_id} : un classement ELO n'a de sens qu'en duel (2 agents)")
     return {
         "agents": list(env.possible_agents),
         "tick_rate": float(tick_rate),
+        "ranking": ranking,
+        "title": env.metadata.get("title", env_id),
+        "description": env.metadata.get("description", ""),
         "observation_spaces": {agent: wire.space_to_spec(env.observation_space(agent)) for agent in env.possible_agents},
         "action_spaces": {agent: wire.space_to_spec(env.action_space(agent)) for agent in env.possible_agents},
     }

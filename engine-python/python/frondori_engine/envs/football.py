@@ -20,6 +20,12 @@ kick_y, kick_flag]`. `kick_flag > 0.5` déclenche un tir dans la direction
 `(kick_x, kick_y)`, la puissance étant la norme de ce vecteur.
 
 Récompense : +1 au tick où l'équipe marque, -1 au tick où elle encaisse.
+
+Infos (par équipe, cumulées depuis le début du match) : `score` (buts
+marqués — clé conventionnelle, que le site affiche comme score du match) et
+`possession` — la part des pas où un joueur de l'équipe
+était le plus proche du ballon. Mesure approximative : le moteur n'a aucune
+notion de contact ou de possession.
 """
 
 from __future__ import annotations
@@ -36,7 +42,15 @@ _TEAM_COLORS = ("#3b82f6", "#ef4444")
 
 
 class FootballEnv(ParallelEnv):
-    metadata = {"name": "football_v0", "render_modes": ["scene"], "is_parallelizable": True}
+    metadata = {
+        "name": "football_v0",
+        "title": "Football 2D",
+        "description": "Deux équipes s'affrontent sur un terrain 2D : chaque agent contrôle une équipe entière.",
+        # Duel : classement ELO, le vainqueur étant l'équipe au meilleur retour.
+        "ranking": "elo",
+        "render_modes": ["scene"],
+        "is_parallelizable": True,
+    }
 
     def __init__(self, render_mode: str | None = None, **config):
         """`config` : n'importe quel paramètre de `EngineConfig` côté Rust
@@ -48,7 +62,9 @@ class FootballEnv(ParallelEnv):
         self._n = self._config.players_per_team
         # Un pas simule `dt` secondes : en compétition, le serveur joue donc
         # le match à 1/dt pas par seconde, pour qu'il se déroule en temps réel.
-        self.metadata = {**self.metadata, "render_fps": 1 / self._config.dt}
+        # `dt` est un f32 côté Rust (1/30 n'y est pas exact) : arrondi pour
+        # annoncer 30 pas/s et non 29.999998.
+        self.metadata = {**self.metadata, "render_fps": round(1 / self._config.dt, 3)}
 
         self.possible_agents = ["team_0", "team_1"]
         self.agents = []
@@ -86,6 +102,7 @@ class FootballEnv(ParallelEnv):
         # l'environnement — donc reproductible à `seed` égal.
         self._engine = _football.Engine(self._config, int(self._rng.integers(0, 2**63)))
         obs_0, obs_1 = self._engine.reset()
+        self._possession_ticks = [0, 0]
         self.agents = list(self.possible_agents)
         observations = {"team_0": _observation(obs_0), "team_1": _observation(obs_1)}
         return observations, {agent: {} for agent in self.agents}
@@ -108,10 +125,28 @@ class FootballEnv(ParallelEnv):
 
         terminations = {agent: terminated for agent in self.agents}
         truncations = {agent: truncated for agent in self.agents}
-        infos = {agent: {"tick": result.info.tick} for agent in self.agents}
+        self._possession_ticks[self._closest_team_to_ball()] += 1
+        total = sum(self._possession_ticks)
+        infos = {
+            agent: {
+                "score": int(obs.score[0]),
+                "possession": round(self._possession_ticks[team] / total, 3),
+            }
+            for team, (agent, obs) in enumerate(zip(self.possible_agents, (obs_0, obs_1)))
+            if agent in self.agents
+        }
         if result.done:
             self.agents = []
         return observations, rewards, terminations, truncations, infos
+
+    def _closest_team_to_ball(self) -> int:
+        frame = self._engine.spectator_frame()
+        ball_x, ball_y = frame.ball.position
+        closest = min(
+            frame.players,
+            key=lambda player: (player.position[0] - ball_x) ** 2 + (player.position[1] - ball_y) ** 2,
+        )
+        return closest.team
 
     def render(self):
         if self.render_mode is None:

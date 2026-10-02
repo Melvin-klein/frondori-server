@@ -208,6 +208,11 @@ n'est pas rejouable à l'identique.
 Hors scope pour l'instant : règles avancées du football (hors-jeu, fautes),
 reconnexion en cours de match, CI.
 
+## Licences
+
+MIT pour ce dépôt, `frondori-engine`, les environnements et le SDK.
+`frondori-web` est propriétaire (tous droits réservés).
+
 ## Convention de travail sur ce projet
 
 L'utilisateur découvre Rust (à l'aise en C/Python). Commenter le code Rust

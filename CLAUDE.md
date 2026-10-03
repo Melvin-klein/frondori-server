@@ -209,8 +209,14 @@ minutes (un agent peut attendre en file sans échanger de message ; nginx
 coupe à 60 s par défaut). Dépôts GitHub : `github.com/Melvin-klein/<dépôt>`
 (`frondori-web` privé).
 
-Pas encore fait : publication sur PyPI (wheels précompilées du football :
-CI multi-plateformes), déploiement.
+Publié sur PyPI (2026-10-03) : `frondori-engine` 0.4.0, `frondori-kitchen`
+0.1.0, `frondori-football` 0.1.0 (wheels abi3 Linux x86_64/aarch64, macOS
+Intel/ARM, Windows x64 : pas de Rust chez l'utilisateur), `frondori-sdk`
+0.4.0. Publication par la CI de chaque dépôt, sur tag `vX.Y.Z` (Trusted
+Publishing). **Ordre imposé** : `frondori-engine` d'abord — les autres le
+prennent sur PyPI, leurs tests échouent tant qu'il n'y est pas.
+
+Pas encore fait : déploiement.
 La seed d'un match n'est pas enregistrée et les actions non plus : un match
 n'est pas rejouable à l'identique.
 

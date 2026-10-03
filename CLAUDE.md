@@ -199,9 +199,18 @@ ne voit que `kitchen-v0` ; match local (13 soupes, comme en ligne) ; serveur
 réel jouant les environnements externes ; paquet d'exemple créé en suivant
 la documentation.
 
+Adresses : le site sur `frondori.com` (`www` redirige), le serveur de jeu
+sur son propre sous-domaine, `wss://play.frondori.com` (`/agent`,
+`/spectate/:id`), derrière un reverse proxy qui termine le TLS. C'est
+l'adresse par défaut du SDK (`DEFAULT_URL`, surchargeable par `FRONDORI_URL`)
+: elle est figée dans chaque SDK installé, ne jamais la changer — déplacer le
+serveur = changer le DNS de `play`. Proxy : délai d'inactivité de plusieurs
+minutes (un agent peut attendre en file sans échanger de message ; nginx
+coupe à 60 s par défaut). Dépôts GitHub : `github.com/Melvin-klein/<dépôt>`
+(`frondori-web` privé).
+
 Pas encore fait : publication sur PyPI (wheels précompilées du football :
-CI multi-plateformes), dépôts GitHub, adresse définitive du serveur (le SDK
-a une adresse provisoire, `DEFAULT_URL`, surchargeable par `FRONDORI_URL`).
+CI multi-plateformes), déploiement.
 La seed d'un match n'est pas enregistrée et les actions non plus : un match
 n'est pas rejouable à l'identique.
 

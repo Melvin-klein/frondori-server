@@ -73,12 +73,19 @@ impl AuthProvider for PostgresAuthProvider {
                 .bind(token)
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(|err| AuthError {
-                    reason: format!("erreur base de données: {err}"),
+                // Le détail de l'erreur reste dans les logs du serveur : le
+                // renvoyer au client exposerait l'intérieur de la base.
+                .map_err(|err| {
+                    tracing::error!(error = %err, "authentification : requête Postgres en échec");
+                    AuthError {
+                        reason: "server error, please retry later".to_string(),
+                    }
                 })?;
 
+        // Messages en anglais : ils arrivent tels quels chez les participants
+        // (exception `AuthenticationError` du SDK).
         player_id.ok_or_else(|| AuthError {
-            reason: "token inconnu".to_string(),
+            reason: "unknown token".to_string(),
         })
     }
 }

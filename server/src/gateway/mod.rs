@@ -51,7 +51,7 @@ async fn handle_new_connection(mut socket: WebSocket, state: AppState) {
     let Some(env) = state.catalog.get(&environment) else {
         let mut available: Vec<&String> = state.catalog.keys().collect();
         available.sort();
-        let reason = format!("environnement {environment:?} indisponible sur ce serveur (disponibles : {available:?})");
+        let reason = format!("environment {environment:?} is not available on this server (available: {available:?})");
         return reject(socket, reason).await;
     };
 

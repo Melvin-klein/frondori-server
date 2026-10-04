@@ -263,6 +263,13 @@ MIT pour ce dépôt, `frondori-engine`, les environnements et le SDK.
 
 ## Convention de travail sur ce projet
 
+**Langues** : le code, ses commentaires et docstrings sont en français ; tout
+ce qu'un participant voit est en ANGLAIS — site et documentation, messages
+d'erreur et logs du SDK, motifs `AuthError` du serveur (ils arrivent tels
+quels dans l'exception `AuthenticationError`), documentation des
+environnements. Ne jamais renvoyer au client le détail d'une erreur interne
+(base de données...) : le logger côté serveur, renvoyer un message générique.
+
 L'utilisateur découvre Rust (à l'aise en C/Python). Commenter le code Rust
 de façon appuyée : expliquer le POURQUOI des choix (ownership, async,
 traits...) autant que le code lui-même. Avant de déclarer une fonctionnalité

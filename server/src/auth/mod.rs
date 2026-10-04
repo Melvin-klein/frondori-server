@@ -58,7 +58,7 @@ impl AuthProvider for InMemoryAuthProvider {
     // appel réseau `.await` à cet endroit précis.
     async fn authenticate(&self, token: &str) -> Result<PlayerId, AuthError> {
         self.tokens.get(token).cloned().ok_or_else(|| AuthError {
-            reason: "token inconnu".to_string(),
+            reason: "unknown token".to_string(),
         })
     }
 }

@@ -1,0 +1,8 @@
+# L'image n'a besoin que des sources Rust : tout le reste est exclu (dont
+# `target/` et `.venv/`, volumineux).
+*
+!Cargo.toml
+!Cargo.lock
+!protocol/
+!server/
+**/target/

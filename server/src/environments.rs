@@ -162,10 +162,34 @@ pub struct EnvWorker {
     stdout: BufReader<ChildStdout>,
 }
 
+/// Le worker exécute le code d'un environnement tiers : il ne doit rien
+/// recevoir d'autre que ce qu'il faut pour lancer Python. Sans ce filtre, un
+/// processus enfant hérite de TOUTES les variables du serveur — dont
+/// `DATABASE_URL` et son mot de passe, lisibles par n'importe quel
+/// environnement installé (`os.environ`). Liste blanche plutôt que liste
+/// noire : un secret ajouté plus tard (clé d'API...) reste protégé sans qu'on
+/// pense à l'exclure.
+fn is_passed_to_worker(name: &str) -> bool {
+    const ALLOWED: &[&str] = &[
+        "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "VIRTUAL_ENV",
+        // Windows : Python ne démarre pas sans elles.
+        "SYSTEMROOT", "TEMP", "TMP",
+    ];
+    // `*_NUM_THREADS` (OMP, OPENBLAS, MKL...) : la taille des pools de threads
+    // de numpy. Sans eux, chaque worker en démarre un par cœur de la machine.
+    ALLOWED.contains(&name) || name.starts_with("PYTHON") || name.ends_with("_NUM_THREADS")
+}
+
 impl EnvWorker {
     pub fn spawn(command: &WorkerCommand) -> Result<Self, WorkerError> {
         let mut child = Command::new(&command.program)
             .args(&command.args)
+            // `env_clear` vide l'environnement hérité, puis `envs` remet
+            // seulement les variables autorisées. `std::env::vars()` est un
+            // itérateur de couples `(String, String)` : `filter` le restreint
+            // sans copier toute la liste au préalable.
+            .env_clear()
+            .envs(std::env::vars().filter(|(name, _)| is_passed_to_worker(name)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Les erreurs Python (traceback) apparaissent dans les logs du
@@ -253,4 +277,24 @@ impl EnvWorker {
 /// Appelé une fois au démarrage du serveur (cf. `main.rs`).
 pub async fn describe_environments(command: &WorkerCommand) -> Result<Catalog, WorkerError> {
     EnvWorker::spawn(command)?.describe().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_passed_to_worker;
+
+    #[test]
+    fn the_worker_never_receives_the_server_secrets() {
+        assert!(!is_passed_to_worker("DATABASE_URL"));
+        assert!(!is_passed_to_worker("FRONDORI_ENV_WORKER"));
+        assert!(!is_passed_to_worker("AWS_SECRET_ACCESS_KEY"));
+    }
+
+    #[test]
+    fn the_worker_keeps_what_python_needs() {
+        assert!(is_passed_to_worker("PATH"));
+        assert!(is_passed_to_worker("HOME"));
+        assert!(is_passed_to_worker("PYTHONUNBUFFERED"));
+        assert!(is_passed_to_worker("OPENBLAS_NUM_THREADS"));
+    }
 }

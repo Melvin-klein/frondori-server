@@ -44,7 +44,11 @@ environnement (`package`), que le site affiche en commande `pip install`.
 
 Sécurité : le code d'un environnement s'exécute sur le serveur ; l'isolation
 par processus protège des plantages, pas d'un code malveillant — n'installer
-que des paquets relus.
+que des paquets relus. Le worker ne reçoit qu'une liste blanche de variables
+d'environnement (`is_passed_to_worker` : PATH, HOME, PYTHON*, *_NUM_THREADS...)
+— sans elle, il héritait de `DATABASE_URL` et de son mot de passe. En
+production, le conteneur du serveur de jeu ajoute le confinement (cf.
+`frondori-deploy`).
 
 ## `protocol` — messages réseau
 
@@ -216,7 +220,15 @@ Intel/ARM, Windows x64 : pas de Rust chez l'utilisateur), `frondori-sdk`
 Publishing). **Ordre imposé** : `frondori-engine` d'abord — les autres le
 prennent sur PyPI, leurs tests échouent tant qu'il n'y est pas.
 
-Pas encore fait : déploiement.
+Déploiement : dépôt privé `frondori-deploy` (Docker Compose, une machine :
+Postgres, serveur de jeu, site, scheduler, tunnel Cloudflare — aucun port
+ouvert). L'image du serveur de jeu est construite par le `Dockerfile` de CE
+dépôt ; les environnements proposés (paquets PyPI, versions fixées) sont
+choisis dans le `compose.yaml` du déploiement. Deux rôles Postgres :
+`frondori_game` possède les tables de ce dépôt, `frondori_web` celles du site
+et n'a que les droits sur les LIGNES des nôtres (vérifié sur un vrai
+Postgres 18, avec un vrai match). Pas encore fait : la mise en service
+elle-même.
 La seed d'un match n'est pas enregistrée et les actions non plus : un match
 n'est pas rejouable à l'identique.
 

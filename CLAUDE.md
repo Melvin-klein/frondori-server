@@ -203,6 +203,24 @@ ne voit que `kitchen-v0` ; match local (13 soupes, comme en ligne) ; serveur
 réel jouant les environnements externes ; paquet d'exemple créé en suivant
 la documentation.
 
+Entraînement avec le SDK (SDK 0.5) : un agent hérite de `frondori.Policy`
+(`act` + `learn`, obligatoires ; `training` mis à vrai par
+`Agent(..., local=True).train(agent, **kwargs)`, qui appelle
+`learn(make_env, **kwargs)`). `make_env()` crée un `SeatEnv`
+(`frondori/training.py`) : un environnement Gymnasium à UN agent (siège tiré
+au hasard, autres sièges en self-play ou par `others`, observations passées
+par l'encodage réseau comme en match), ce qu'attendent CleanRL et
+Stable-Baselines3 (vérifié). `observation_format = "flat"` : observations en
+un vecteur float32 à l'entraînement ET en match (`policy.bind`, appliqué par
+`run`/`play` et le mode local ; `run(agent.act)` est reconnu). Agents prêts à
+l'emploi `frondori.agents` (PPO, DQN, SAC adaptés de CleanRL, MIT, licences
+dans `THIRD_PARTY_LICENSES.md`), extra `frondori-sdk[train]` (PyTorch).
+**Pièges** : la cuisine a une récompense trop rare pour un agent qui débute
+(rien appris sans façonnage ; avec un wrapper de façonnage par potentiel,
+PPO sert 11 soupes par match après 2 M de pas, ~8 min sur CPU) ; les scripts CleanRL
+visent Gymnasium 0.29 (`final_observation`), le SDK Gymnasium 1.x
+(`final_obs`, `AutoresetMode.SAME_STEP`).
+
 Adresses : le site sur `frondori.com` (`www` redirige), le serveur de jeu
 sur son propre sous-domaine, `wss://play.frondori.com` (`/agent`,
 `/spectate/:id`), derrière un reverse proxy qui termine le TLS. C'est

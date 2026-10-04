@@ -227,8 +227,11 @@ dépôt ; les environnements proposés (paquets PyPI, versions fixées) sont
 choisis dans le `compose.yaml` du déploiement. Deux rôles Postgres :
 `frondori_game` possède les tables de ce dépôt, `frondori_web` celles du site
 et n'a que les droits sur les LIGNES des nôtres (vérifié sur un vrai
-Postgres 18, avec un vrai match). Pas encore fait : la mise en service
-elle-même.
+Postgres 18, avec un vrai match). Pile complète validée sous Docker (OrbStack,
+arm64) : matchs cuisine et football au rythme réel, flux spectateur,
+classement par le scheduler, replays, `update.sh`/`backup.sh`/`restore.sh` ;
+le worker n'a pas `DATABASE_URL`, le serveur de jeu n'a pas Internet. Pas
+encore fait : la mise en service elle-même.
 La seed d'un match n'est pas enregistrée et les actions non plus : un match
 n'est pas rejouable à l'identique.
 
